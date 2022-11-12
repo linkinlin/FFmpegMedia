@@ -1,13 +1,13 @@
-#include "FFMPEGFrameQueue.h"
-#include "FFMPEGFrame.h"
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
-FFMPEGFrameQueue::FFMPEGFrameQueue()
+#include "FFmpeg/FFmpegFrameQueue.h"
+
+FFmpegFrameQueue::FFmpegFrameQueue()
 {
-    for ( int i = 0; i < FRAME_QUEUE_SIZE; i++) {
-        queue[i] = new FFMPEGFrame();
+    for (int i = 0; i < FRAME_QUEUE_SIZE; i++) {
+        queue[i] = new FFmpegFrame();
     }
-
     rindex = 0;
     windex = 0;
     size = 0;
@@ -17,144 +17,144 @@ FFMPEGFrameQueue::FFMPEGFrameQueue()
     pktq = NULL;
 }
 
-
-FFMPEGFrameQueue::~FFMPEGFrameQueue()
+FFmpegFrameQueue::~FFmpegFrameQueue()
 {
-    Destroy();
-    for (int i = 0; i < FRAME_QUEUE_SIZE; i++) {
-        if ( queue[i] ) delete queue[i];
-        queue[i] = NULL;
-    }
 }
 
-int FFMPEGFrameQueue::Init( FFMPEGPacketQueue *_pktq, int _max_size, int _keep_last) {
-    this->pktq = _pktq;
-    this->max_size = FFMIN(_max_size, FRAME_QUEUE_SIZE);
-    this->keep_last = !!_keep_last;
-    for (int i = 0; i < this->max_size; i++)
-        if (!(queue[i]->Init()))
+int FFmpegFrameQueue::Init(FFmpegPacketQueue* pktq_, int max_size_, int keep_last_)
+{
+    int i;
+    this->mutex = new FCriticalSection();
+    if (!this->mutex) {
+        av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n");
+        return AVERROR(ENOMEM);
+    }
+
+    this->cond = new FFmpegCond();
+    if (!this->cond) {
+        av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n");
+        return AVERROR(ENOMEM);
+    }
+
+    this->pktq = pktq_;
+    this->max_size = FFMIN(max_size_, FRAME_QUEUE_SIZE);
+    this->keep_last = !!keep_last_;
+    for (i = 0; i < this->max_size; i++)
+        if (!(this->queue[i]->Init()))
             return AVERROR(ENOMEM);
     return 0;
 }
 
-void FFMPEGFrameQueue::Destroy() {
-    
-    for (int i = 0; i < max_size; i++) {
-        FFMPEGFrame *vp = queue[i];
-        if ( vp) vp->Destroy();
+void FFmpegFrameQueue::Destory()
+{
+    int i;
+    for (i = 0; i < this->max_size; i++) {
+        FFmpegFrame* vp = this->queue[i];
+        vp->UnrefItem();
+        AVFrame* frame = vp->GetFrame();
+        av_frame_free(&frame);
     }
-    
-    rindex = 0;
-    windex = 0;
-    size = 0;
-    max_size = 0;
-    keep_last = 0;
-    rindex_shown = 0;
-    pktq = NULL;
+    //SDL_DestroyMutex(f->mutex);
+    //SDL_DestroyCond(f->cond);
 }
 
-void FFMPEGFrameQueue::Signal() {
-    mutex.Lock();
-    cond.signal();
-    mutex.Unlock();
+void FFmpegFrameQueue::Signal()
+{
+    this->mutex->Lock();
+    this->cond->signal();
+    this->mutex->Unlock();
 }
 
-FFMPEGFrame *FFMPEGFrameQueue::Peek() {
-    return queue[(rindex + rindex_shown) % max_size];
+FFmpegFrame* FFmpegFrameQueue::Peek()
+{
+    return this->queue[(this->rindex + this->rindex_shown) % this->max_size];
 }
 
-FFMPEGFrame *FFMPEGFrameQueue::PeekNext() {
-    return queue[(rindex + rindex_shown + 1) % max_size];
+FFmpegFrame* FFmpegFrameQueue::PeekNext()
+{
+    return this->queue[(this->rindex + this->rindex_shown + 1) % this->max_size];
 }
 
-FFMPEGFrame *FFMPEGFrameQueue::PeekLast() {
-    return queue[rindex];
+FFmpegFrame* FFmpegFrameQueue::PeekLast()
+{
+    return this->queue[this->rindex];
 }
 
-FFMPEGFrame *FFMPEGFrameQueue::PeekWritable() {
-    mutex.Lock();
-    while (size >= max_size &&
-        !pktq->IsAbortRequest()) {
-        cond.wait(mutex);
+FFmpegFrame* FFmpegFrameQueue::PeekWritable()
+{
+    /* wait until we have space to put a new frame */
+    this->mutex->Lock();
+    while (this->size >= this->max_size &&
+        !this->pktq->GetAbortRequest()) {
+        this->cond->wait(*this->mutex);
     }
-    mutex.Unlock();
-
-    if (pktq->IsAbortRequest())
+    this->mutex->Unlock();
+    if (this->pktq->GetAbortRequest())
         return NULL;
 
-    return queue[windex];
+    return this->queue[this->windex];
 }
-FFMPEGFrame *FFMPEGFrameQueue::PeekReadable() {
-    mutex.Lock();
-    while (size - rindex_shown <= 0 &&
-        !pktq->IsAbortRequest()) {
-        cond.wait(mutex);
-    }
-    mutex.Unlock();
 
-    if (pktq->IsAbortRequest())
+FFmpegFrame* FFmpegFrameQueue::PeekReadable()
+{
+    /* wait until we have a readable a new frame */
+    this->mutex->Lock();
+    while (this->size - this->rindex_shown <= 0 &&
+        !this->pktq->GetAbortRequest()) {
+        this->cond->wait(*this->mutex);
+    }
+    this->mutex->Unlock();
+    if (this->pktq->GetAbortRequest())
         return NULL;
 
-    return queue[(rindex + rindex_shown) % max_size];
+    return this->queue[(this->rindex + this->rindex_shown) % this->max_size];
 }
 
-int FFMPEGFrameQueue::QueuePicture( AVFrame *src_frame, double pts, double duration, int64_t pos, int serial) {
-    
-    FFMPEGFrame *vp = PeekWritable();
-    if (!vp )
-        return -1;
-
-    vp->UpdateFrame(src_frame, pts, duration, pos, serial);
-    av_frame_move_ref(vp->GetFrame(), src_frame);
-
-    Push();
-    return 0;
+void FFmpegFrameQueue::Push()
+{
+    if (++this->windex == this->max_size)
+        this->windex = 0;
+    this->mutex->Lock();
+    this->size++;
+    this->cond->signal();
+    this->mutex->Unlock();
 }
 
-void FFMPEGFrameQueue::Push() {
-    if (++windex == max_size)
-        windex = 0;
-    mutex.Lock();
-    size++;
-    cond.signal();
-    mutex.Unlock();
-}
-
-void FFMPEGFrameQueue::Next() {
-    if (keep_last && !rindex_shown) {
-        rindex_shown = 1;
+void FFmpegFrameQueue::Next()
+{
+    if (this->keep_last && !this->rindex_shown) {
+        this->rindex_shown = 1;
         return;
     }
-    queue[rindex]->UnRef();
-    if (++rindex == max_size)
-        rindex = 0;
-    mutex.Lock();
-    size--;
-    cond.signal();
-    mutex.Unlock();
-   
+    this->queue[this->rindex]->UnrefItem();
+    if (++this->rindex == this->max_size)
+        this->rindex = 0;
+    this->mutex->Lock();
+    this->size--;
+    this->cond->signal();
+    this->mutex->Unlock();
+}
+/** 判断是否剩余 */
+int FFmpegFrameQueue::NbRemaining()
+{
+    return this->size - this->rindex_shown;
 }
 
-void FFMPEGFrameQueue::Lock() {
-    mutex.Lock();
-}
-
-void FFMPEGFrameQueue::Unlock() {
-    mutex.Unlock();
-}
-
-int FFMPEGFrameQueue::GetNumRemaining() {
-     return size - rindex_shown;
-}
-
-int64_t FFMPEGFrameQueue::GetQueueLastPos() {
-    FFMPEGFrame *fp = queue[rindex];
-    if (rindex_shown && fp->GetSerial() == pktq->GetSerial())
+int64_t FFmpegFrameQueue::LastPos()
+{
+    FFmpegFrame* fp = this->queue[this->rindex];
+    if (this->rindex_shown && fp->GetSerial() == this->pktq->GetSerial())
         return fp->GetPos();
     else
         return -1;
 }
 
-int  FFMPEGFrameQueue::GetIndexShown() {
-    return rindex_shown;
+FCriticalSection* FFmpegFrameQueue::GetMutex()
+{
+    return this->mutex;
+}
+
+int FFmpegFrameQueue::GetRindexShown()
+{
+    return this->rindex_shown;
 }

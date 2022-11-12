@@ -1,48 +1,44 @@
-#include "FFMPEGDecoder.h"
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
-FFMPEGDecoder::FFMPEGDecoder() {
-    decoder_reorder_pts = -1;
-    queue = NULL;
-    avctx = NULL;
-    pkt_serial = -1;
-    finished = 0;
-    packet_pending = false;
-    empty_queue_cond = NULL;
-    start_pts = 0;
-    start_pts_tb = {0,0};
-    next_pts = 0;
-    next_pts_tb = {0, 0};
-    decoder_tid = NULL;
-}
+#include "FFmpeg/FFmpegDecoder.h"
 
-
-FFMPEGDecoder::~FFMPEGDecoder()
+FFmpegDecoder::FFmpegDecoder()
 {
 }
 
-void FFMPEGDecoder::Init(AVCodecContext *_avctx, FFMPEGPacketQueue *_queue, CondWait *_empty_queue_cond) {
-    this->avctx = _avctx;
-    this->queue = _queue;
-    this->empty_queue_cond = _empty_queue_cond;
-    this->start_pts = AV_NOPTS_VALUE;
-    this->pkt_serial = -1;
+FFmpegDecoder::~FFmpegDecoder()
+{
 }
 
-int FFMPEGDecoder::DecodeFrame( AVFrame *frame, AVSubtitle *sub) {
+/** 初始化解码器 */
+int FFmpegDecoder::Init(AVCodecContext* avctx_, FFmpegPacketQueue* queue_, FFmpegCond* empty_queue_cond_)
+{
+    this->pkt = av_packet_alloc();
+    if (!this->pkt)
+        return AVERROR(ENOMEM);
+    this->avctx = avctx_;
+    this->queue = queue_;
+    this->empty_queue_cond = empty_queue_cond_;
+    this->start_pts = AV_NOPTS_VALUE;
+    this->pkt_serial = -1;
+    return 0;
+}
+
+int FFmpegDecoder::DecodeFrame(AVFrame* frame, AVSubtitle* sub)
+{
+    //解码时重新排序 0=off 1=on -1=auto
+    int decoder_reorder_pts = -1;
     int ret = AVERROR(EAGAIN);
-
     for (;;) {
-        AVPacket pkt;
-
-        if (queue->GetSerial() == pkt_serial) {
+        if (this->queue->GetSerial() == this->pkt_serial) {
             do {
-                if (queue->IsAbortRequest())
+                if (this->queue->GetAbortRequest())
                     return -1;
 
-                switch (avctx->codec_type) {
+                switch (this->avctx->codec_type) {
                 case AVMEDIA_TYPE_VIDEO:
-                    ret = avcodec_receive_frame(avctx, frame);
+                    ret = avcodec_receive_frame(this->avctx, frame);
                     if (ret >= 0) {
                         if (decoder_reorder_pts == -1) {
                             frame->pts = frame->best_effort_timestamp;
@@ -53,23 +49,23 @@ int FFMPEGDecoder::DecodeFrame( AVFrame *frame, AVSubtitle *sub) {
                     }
                     break;
                 case AVMEDIA_TYPE_AUDIO:
-                    ret = avcodec_receive_frame(avctx, frame);
+                    ret = avcodec_receive_frame(this->avctx, frame);
                     if (ret >= 0) {
                         AVRational tb = { 1, frame->sample_rate };
                         if (frame->pts != AV_NOPTS_VALUE)
-                            frame->pts = av_rescale_q(frame->pts, avctx->pkt_timebase, tb);
-                        else if (next_pts != AV_NOPTS_VALUE)
-                            frame->pts = av_rescale_q(next_pts, next_pts_tb, tb);
+                            frame->pts = av_rescale_q(frame->pts, this->avctx->pkt_timebase, tb);
+                        else if (this->next_pts != AV_NOPTS_VALUE)
+                            frame->pts = av_rescale_q(this->next_pts, this->next_pts_tb, tb);
                         if (frame->pts != AV_NOPTS_VALUE) {
-                            next_pts = frame->pts + frame->nb_samples;
-                            next_pts_tb = tb;
+                            this->next_pts = frame->pts + frame->nb_samples;
+                            this->next_pts_tb = tb;
                         }
                     }
                     break;
                 }
                 if (ret == AVERROR_EOF) {
-                    finished = pkt_serial;
-                    avcodec_flush_buffers(avctx);
+                    this->finished = this->pkt_serial;
+                    avcodec_flush_buffers(this->avctx);
                     return 0;
                 }
                 if (ret >= 0)
@@ -78,120 +74,110 @@ int FFMPEGDecoder::DecodeFrame( AVFrame *frame, AVSubtitle *sub) {
         }
 
         do {
-            if (queue->GetNumPackets() == 0)
-                empty_queue_cond->signal();
-            if (packet_pending) {
-                av_packet_move_ref(&pkt, &pkt);
-                packet_pending = false;
+            if (this->queue->GetNbPackets() == 0)
+                this->empty_queue_cond->signal();
+            if (this->packet_pending) {
+                this->packet_pending = 0;
             }
             else {
-                if (queue->Get(&pkt, 1, &pkt_serial) < 0)
+                int old_serial = this->pkt_serial;
+                if (this->queue->Get(this->pkt, 1, &this->pkt_serial) < 0)
                     return -1;
+                if (old_serial != this->pkt_serial) {
+                    avcodec_flush_buffers(this->avctx);
+                    this->finished = 0;
+                    this->next_pts = this->start_pts;
+                    this->next_pts_tb = this->start_pts_tb;
+                }
             }
-        } while (queue->GetSerial() != pkt_serial);
+            if (this->queue->GetSerial() == this->pkt_serial)
+                break;
+            av_packet_unref(this->pkt);
+        } while (1);
 
-        if (FFMPEGPacketQueue::IsFlushPacket(pkt.data)) {
-            avcodec_flush_buffers(avctx);
-            finished = 0;
-            next_pts = start_pts;
-            next_pts_tb = start_pts_tb;
+        if (this->avctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+            int got_frame = 0;
+            ret = avcodec_decode_subtitle2(this->avctx, sub, &got_frame, this->pkt);
+            if (ret < 0) {
+                ret = AVERROR(EAGAIN);
+            }
+            else {
+                if (got_frame && !this->pkt->data) {
+                    this->packet_pending = 1;
+                }
+                ret = got_frame ? 0 : (this->pkt->data ? AVERROR(EAGAIN) : AVERROR_EOF);
+            }
+            av_packet_unref(this->pkt);
         }
         else {
-            if (avctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
-                int got_frame = 0;
-                ret = avcodec_decode_subtitle2(avctx, sub, &got_frame, &pkt);
-                if (ret < 0) {
-                    ret = AVERROR(EAGAIN);
-                }
-                else {
-                    if (got_frame && !pkt.data) {
-                        packet_pending = 1;
-                        av_packet_move_ref(&pkt, &pkt);
-                    }
-                    ret = got_frame ? 0 : (pkt.data ? AVERROR(EAGAIN) : AVERROR_EOF);
-                }
+            if (avcodec_send_packet(this->avctx, this->pkt) == AVERROR(EAGAIN)) {
+                av_log(this->avctx, AV_LOG_ERROR, "Receive_frame and send_packet both returned EAGAIN, which is an API violation.\n");
+                this->packet_pending = 1;
             }
             else {
-                if (avcodec_send_packet(avctx, &pkt) == AVERROR(EAGAIN)) {
-                    av_log(avctx, AV_LOG_ERROR, "Receive_frame and send_packet both returned EAGAIN, which is an API violation.\n");
-                    packet_pending = 1;
-                    av_packet_move_ref(&pkt, &pkt);
-                }
+                av_packet_unref(this->pkt);
             }
-            av_packet_unref(&pkt);
         }
     }
-
-    return ret;
 }
 
-void FFMPEGDecoder::SetDecoderReorderPts ( int pts ) {
-    decoder_reorder_pts = pts;
+void FFmpegDecoder::SetStartPts(int64_t start_pts_)
+{
+    this->start_pts = start_pts_;
 }
 
-void  FFMPEGDecoder::Destroy() {    
-    avcodec_free_context(&avctx);
-    avctx = NULL;
+void FFmpegDecoder::SetStartPtsTb(AVRational start_pts_tb_)
+{
+     this->start_pts_tb = start_pts_tb_;
 }
 
-void FFMPEGDecoder::Abort(FFMPEGFrameQueue* fq) {
-    queue->Abort();
-    fq->Signal();
-
-    try {
-        if (decoder_tid->joinable()) {
-            decoder_tid->join();
-        }
-    }
-    catch (std::system_error &) {
-    }
-
-    delete decoder_tid;
-
-    queue->Flush();
-}
-
-int FFMPEGDecoder::Start(std::function<int (void *)> thread_func, void *arg ) {
+int FFmpegDecoder::Start(std::function<int(void*)> thread_func, void* arg)
+{
     queue->Start();
-
     std::thread cpp_thread(thread_func, arg);
     decoder_tid = new std::thread(std::move(cpp_thread));
-
     if (!decoder_tid) {
         //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
         return AVERROR(ENOMEM);
-    }
-#ifdef TARGET_WIN32
-    HANDLE hThread = decoder_tid->native_handle();
-    int currentPriority = GetThreadPriority(hThread);
-
-    if (currentPriority != THREAD_PRIORITY_HIGHEST &&
-        SetThreadPriority(hThread, THREAD_PRIORITY_HIGHEST) == 0) {
-        OFX_LOG(ofx_error, "Error setting the thread priority");
-    }
-#endif
-
+    };
     return 0;
 }
-
-AVCodecContext*  FFMPEGDecoder::GetAvctx() {
-    return avctx;
+   
+int FFmpegDecoder::GetPktSerial()
+{
+    return this->pkt_serial;
 }
 
-int  FFMPEGDecoder::GetPktSerial() {
-    return pkt_serial;
+AVCodecContext* FFmpegDecoder::GetAvctx()
+{
+    return this->avctx;
 }
 
-int  FFMPEGDecoder::GetFinished() {
-    return finished;
+int FFmpegDecoder::GetFinished()
+{
+    return this->finished;
 }
 
-void  FFMPEGDecoder::SetTime ( int64_t _start_pts, AVRational  _start_pts_tb) {
-    this->start_pts = _start_pts;
-    this->start_pts_tb = _start_pts_tb;
+void FFmpegDecoder::Abort(FFmpegFrameQueue* fq)
+{
+    this->queue->Abort();
+    fq->Signal();
+    try {
+        if (this->decoder_tid->joinable()) {
+            decoder_tid->join();
+        }
+    }
+    catch (std::system_error&) {
+    }
+    delete decoder_tid;
+    this->queue->Flush();
 }
 
-void  FFMPEGDecoder::SetFinished ( int _finished ) {
-    this->finished = _finished;
+void FFmpegDecoder::Destroy()
+{
+    av_packet_free(&this->pkt);
+    avcodec_free_context(&this->avctx);
 }
 
+
+   

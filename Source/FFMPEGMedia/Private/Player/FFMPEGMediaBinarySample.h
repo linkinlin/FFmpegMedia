@@ -1,4 +1,4 @@
-// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,19 +12,19 @@
 /**
  * Implements a media binary data sample for WmfMedia.
  */
-class FFFMPEGMediaBinarySample
+class FFFmpegMediaBinarySample
 	: public IMediaBinarySample
 {
 public:
 
 	/** Default constructor. */
-	FFFMPEGMediaBinarySample()
+	FFFmpegMediaBinarySample()
 		: Duration(FTimespan::Zero())
 		, Time(FTimespan::Zero())
 	{ }
 
 	/** Virtual destructor. */
-	virtual ~FFFMPEGMediaBinarySample() { }
+	virtual ~FFFmpegMediaBinarySample() { }
 
 public:
 
@@ -77,7 +77,7 @@ public:
 
 	virtual FMediaTimeStamp GetTime() const override
 	{
-		return Time;
+		return FMediaTimeStamp(Time);
 	}
 
 private:
@@ -89,5 +89,5 @@ private:
 	FTimespan Duration;
 
 	/** Presentation time for which the sample was generated. */
-	FMediaTimeStamp Time;
+	FTimespan Time;
 };

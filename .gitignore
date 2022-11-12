@@ -2,7 +2,7 @@
 # Unreal Generated Files #
 ##########################
 Build
-Binaries
+Binaries/Win64
 DerivedDataCache
 Intermediate/**
 *.VC.db

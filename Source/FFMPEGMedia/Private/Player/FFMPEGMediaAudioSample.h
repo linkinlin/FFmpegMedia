@@ -1,4 +1,4 @@
-// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,14 +14,14 @@
 /**
  * Implements a media audio sample for WmfMedia.
  */
-class FFFMPEGMediaAudioSample
+class FFFmpegMediaAudioSample
 	: public IMediaAudioSample
 	, public IMediaPoolable
 {
 public:
 
 	/** Default constructor. */
-	FFFMPEGMediaAudioSample()
+	FFFmpegMediaAudioSample()
 		: Channels(0)
 		, Duration(FTimespan::Zero())
 		, SampleRate(0)
@@ -29,7 +29,7 @@ public:
 	{ }
 
 	/** Virtual destructor. */
-	virtual ~FFFMPEGMediaAudioSample() { }
+	virtual ~FFFmpegMediaAudioSample() { }
 
 public:
 
@@ -101,7 +101,7 @@ public:
 
 	virtual FMediaTimeStamp GetTime() const override
 	{
-		return Time;
+		return FMediaTimeStamp(Time);
 	}
 
 private:
@@ -119,9 +119,9 @@ private:
 	uint32 SampleRate;
 
 	/** Presentation time for which the sample was generated. */
-	FMediaTimeStamp Time;
+	FTimespan Time;
 };
 
 
 /** Implements a pool for WMF audio sample objects. */
-class FFFMPEGMediaAudioSamplePool : public TMediaObjectPool<FFFMPEGMediaAudioSample> { };
+class FFFmpegMediaAudioSamplePool : public TMediaObjectPool<FFFmpegMediaAudioSample> { };

@@ -1,159 +1,117 @@
-#include "FFMPEGFrame.h"
+// Fill out your copyright notice in the Description page of Project Settings.
 
-FFMPEGFrame::FFMPEGFrame()
+
+#include "FFmpeg/FFmpegFrame.h"
+
+FFmpegFrame::FFmpegFrame()
 {
     frame = NULL;
+    sub = { 0 };
     serial = 0;
-    pts = 0.0;           
-    duration = 0.0;      
-    pos = 0;          
+    pts = 0.0;
+    duration = 0.0;
+    pos = 0;
     width = 0;
     height = 0;
-    format = 0;    
+    format = 0;
     uploaded = false;
     flip_v = false;
-    sub = {0};
 }
 
-FFMPEGFrame::~FFMPEGFrame()
+FFmpegFrame::~FFmpegFrame()
 {
-    Destroy();
+    av_frame_unref(frame);
+    avsubtitle_free(&sub);
 }
 
-int FFMPEGFrame::Init () {
-    Destroy();
+int FFmpegFrame::Init()
+{
     frame = av_frame_alloc();
-    return frame == 0? 0: 1;
+    return frame == NULL ? 0 : 1;
 }
 
-void FFMPEGFrame::Destroy() {
-    if (frame != NULL) {
-        UnRef();
-        av_frame_free(&frame);
-    }
-    frame = NULL;
-    uploaded = false;
+AVFrame* FFmpegFrame::GetFrame()
+{
+    return this->frame;
 }
 
-void FFMPEGFrame::UnRef() {
-    if ( frame != NULL) {
-        av_frame_unref(frame);
-        avsubtitle_free(&sub);
-    }
+int FFmpegFrame::GetSerial()
+{
+    return this->serial;
 }
 
-int FFMPEGFrame::GetSerial() {
-    return serial;
+int64_t FFmpegFrame::GetPos()
+{
+    return this->pos;
 }
 
-int64_t FFMPEGFrame::GetPos() {
-    return pos;
+double FFmpegFrame::GetPts()
+{
+    return this->pts;
 }
 
-double FFMPEGFrame::GetPts() {
-    return pts;
-
+void FFmpegFrame::SetPts(double pts_)
+{
+    this->pts = pts_;
 }
 
-double FFMPEGFrame::GetDuration() {
-    return duration;
+void FFmpegFrame::SetPos(int64_t pos_)
+{
+    this->pos = pos_;
 }
 
-AVFrame* FFMPEGFrame::GetFrame() {
-    return frame;
+void FFmpegFrame::SetSerial(int serial_)
+{
+    this->serial = serial_;
 }
 
-int FFMPEGFrame::GetWidth() {
-    return width;
+void FFmpegFrame::SetDuration(double duration_)
+{
+    this->duration = duration_;
 }
 
-int FFMPEGFrame::GetHeight() {
-    return height;
+double FFmpegFrame::GetDuration()
+{
+    return this->duration;
 }
 
-int FFMPEGFrame::GetFormat() {
-    return format;
+void FFmpegFrame::SetUploaded(int uploaded_)
+{
+    this->uploaded = uploaded_;
 }
 
-AVRational FFMPEGFrame::GetSar() {
-    return sar;
+int FFmpegFrame::GetUploaded()
+{
+    return this->uploaded;
 }
 
-bool FFMPEGFrame::IsUploaded() {
-    return uploaded;
+void FFmpegFrame::SetSar(AVRational sar_)
+{
+    this->sar = sar_;
 }
 
-bool FFMPEGFrame::IsVerticalFlip() {
-    return flip_v;
+void FFmpegFrame::SetWidth(int width_)
+{
+    this->width = width_;
 }
 
-AVSubtitle& FFMPEGFrame::GetSub() {
-    return sub;
+void FFmpegFrame::SetHeight(int height_)
+{
+    this->height = height_;
 }
 
-double FFMPEGFrame::GetDifference(FFMPEGFrame* nextvp, double max) {
-
-    if (serial == nextvp->serial) {
-        double diff = nextvp->pts - pts;
-        if (isnan(diff) || diff <= 0 || diff > max)
-            return GetDuration();
-        else
-            return diff;
-    }
-    else {
-        return 0.0;
-    }
+void FFmpegFrame::SetFormat(int format_)
+{
+    this->format = format_;
 }
 
-void FFMPEGFrame::UpdateFrame(AVFrame* src_frame, double _pts, double _duration, int64_t _pos, int _serial) {
-    this->sar = src_frame->sample_aspect_ratio;
-    this->uploaded = 0;
-    
-    this->width = src_frame->width;
-    this->height = src_frame->height;
-    this->format = src_frame->format;
-    
-    this->pts = _pts;
-    this->duration = _duration;
-    this->pos = _pos;
-    this->serial = _serial;
+AVSubtitle& FFmpegFrame::GetSub()
+{
+    return this->sub;
 }
 
-
-void FFMPEGFrame::UpdateSize(FFMPEGFrame *vp) {
-    width = vp->width;
-    height = vp->height;
+void FFmpegFrame::UnrefItem()
+{
+    av_frame_unref(this->frame); //frame计数减1
+    avsubtitle_free(&this->sub); //sub关联的内存释放
 }
-
-void FFMPEGFrame::SetPts(double _pts) {
-    this->pts = _pts;
-}
-
-void FFMPEGFrame::SetSerial(int s) {
-    this->serial = s;
-}
-
-void FFMPEGFrame::SetWidth(int w) {
-    this->width = w;
-}
-
-void FFMPEGFrame::SetHeight(int h) {
-    this->height = h;
-}
-
-void FFMPEGFrame::SetUploaded(bool u) {
-    this->uploaded = u;
-}
-
-void FFMPEGFrame::SetVerticalFlip(bool fv) {
-    this->flip_v = fv;
-}
-
-void FFMPEGFrame::SetPos(int64_t p) {
-    this->pos = p;
-}
-
-void FFMPEGFrame::SetDuration(double d) {
-    this->duration = d;
-}
-

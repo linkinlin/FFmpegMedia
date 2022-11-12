@@ -1,4 +1,4 @@
-// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,19 +12,19 @@
 /**
  * Implements an overlay text sample for WmfMedia.
  */
-class FFFMPEGMediaOverlaySample
+class FFFmpegMediaOverlaySample
 	: public IMediaOverlaySample
 {
 public:
 
 	/** Default constructor. */
-	FFFMPEGMediaOverlaySample()
+	FFFmpegMediaOverlaySample()
 		: Duration(FTimespan::Zero())
 		, Time(FTimespan::Zero())
 	{ }
 
 	/** Virtual destructor. */
-	virtual ~FFFMPEGMediaOverlaySample() { }
+	virtual ~FFFmpegMediaOverlaySample() { }
 
 public:
 
@@ -37,7 +37,6 @@ public:
 	 */
 	bool Initialize(
 		const char* InBuffer,
-        FVector2D InPosition,
 		FTimespan InTime,
 		FTimespan InDuration)
 	{
@@ -75,7 +74,6 @@ public:
 		Duration = (InDuration < FTimespan::Zero()) ? FTimespan::MaxValue() : InDuration;
 		Text = FText::FromString(StrippedText);
 		Time = InTime;
-        Position = InPosition;
 
 		return true;
 	}
@@ -101,12 +99,12 @@ public:
 
 	virtual FMediaTimeStamp GetTime() const override
 	{
-		return Time;
+		return FMediaTimeStamp(Time);
 	}
 
 	virtual EMediaOverlaySampleType GetType() const override
 	{
-		return EMediaOverlaySampleType::Subtitle;
+		return EMediaOverlaySampleType::Caption;
 	}
 
 private:
@@ -118,9 +116,5 @@ private:
 	FText Text;
 
 	/** Presentation time for which the sample was generated. */
-	FMediaTimeStamp Time;
-
-    /** Position for the subtitle */
-    FVector2D Position;
-
+	FTimespan Time;
 };

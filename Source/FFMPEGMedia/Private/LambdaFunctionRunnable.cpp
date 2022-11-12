@@ -1,10 +1,15 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
 #include "LambdaFunctionRunnable.h"
 
 
 LambdaFunctionRunnable::LambdaFunctionRunnable(std::function<void()> f) {
 	_f = f;
 }
-FRunnableThread* LambdaFunctionRunnable::RunThreaded(FString threadName, std::function<void()> f) {
+
+FRunnableThread* LambdaFunctionRunnable::RunThreaded(FString threadName, std::function<void()> f)
+{
 	static int currentThread = 0;
 	LambdaFunctionRunnable* runnable = new LambdaFunctionRunnable(f);
 	FString _threadName = threadName + FString::FromInt(currentThread++);

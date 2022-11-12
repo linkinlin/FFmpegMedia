@@ -1,55 +1,63 @@
-// Copyright 1998-2018 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
-namespace UnrealBuildTool.Rules
+using UnrealBuildTool;
+
+public class FFmpegMediaFactory : ModuleRules
 {
-	public class FFMPEGMediaFactory : ModuleRules
+	public FFmpegMediaFactory(ReadOnlyTargetRules Target) : base(Target)
 	{
-		public FFMPEGMediaFactory(ReadOnlyTargetRules Target) : base(Target)
-		{
-			PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-			ShadowVariableWarningLevel = WarningLevel.Error;
-			OptimizeCode = CodeOptimization.Never;
-
-			DynamicallyLoadedModuleNames.AddRange(
-				new string[] {
-					"Media",
-				});
-
-			PrivateDependencyModuleNames.AddRange(
-				new string[] {
-					"Core",
-					"CoreUObject",
-					"MediaAssets",
-				});
-
-			PrivateIncludePathModuleNames.AddRange(
-				new string[] {
-					"Media",
-					"FFMPEGMedia",
-				});
-
-			PrivateIncludePaths.AddRange(
-				new string[] {
-					"FFMPEGMediaFactory/Private",
-				});
-
-			PublicDependencyModuleNames.AddRange(
-				new string[] {
-					"Core",
-					"CoreUObject",
-				});
-
-			if (Target.Type == TargetType.Editor)
-			{
-				DynamicallyLoadedModuleNames.Add("Settings");
-				PrivateIncludePathModuleNames.Add("Settings");
+		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		
+		PublicIncludePaths.AddRange(
+			new string[] {
+				// ... add public include paths required here ...
 			}
-
-			if ((Target.Platform == UnrealTargetPlatform.Win32) ||
-				(Target.Platform == UnrealTargetPlatform.Win64))
-			{
-				DynamicallyLoadedModuleNames.Add("FFMPEGMedia");
+			);
+				
+		
+		PrivateIncludePaths.AddRange(
+			new string[] {
+				"FFmpegMediaFactory/Private",
+				// ... add other private include paths required here ...
 			}
-		}
+			);
+
+
+		PrivateIncludePathModuleNames.AddRange(
+			new string[] {
+				"Media",
+				"FFmpegMedia",
+		});
+
+		PublicDependencyModuleNames.AddRange(
+			new string[]
+			{
+				"Core",
+				"Projects",
+				"CoreUObject",
+				// ... add other public dependencies that you statically link with here ...
+			}
+			);
+			
+		
+		PrivateDependencyModuleNames.AddRange(
+			new string[]
+			{
+				"Core",
+				"CoreUObject",
+				"MediaAssets",
+				// ... add private dependencies that you statically link with here ...	
+			}
+			);
+		
+		
+		DynamicallyLoadedModuleNames.AddRange(
+			new string[]
+			{
+				// ... add any modules that your module loads dynamically here ...
+				"Media",
+				"FFmpegMedia"
+			}
+			);
 	}
 }
