@@ -50,9 +50,11 @@ void FFmpegFrameQueue::Destory()
     int i;
     for (i = 0; i < this->max_size; i++) {
         FFmpegFrame* vp = this->queue[i];
-        vp->UnrefItem();
-        AVFrame* frame = vp->GetFrame();
-        av_frame_free(&frame);
+        if (vp != nullptr) {
+            vp->UnrefItem();
+            AVFrame* frame = vp->GetFrame();
+            av_frame_free(&frame);
+        }
     }
     //SDL_DestroyMutex(f->mutex);
     //SDL_DestroyCond(f->cond);

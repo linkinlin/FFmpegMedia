@@ -5,6 +5,8 @@
 #include "Async/Async.h"
 #include "FFmpegMediaTracks.h"
 #include "IMediaEventSink.h"
+#include "FFmpegMediaSettings.h"
+
 extern  "C" {
 #include "libavformat/avformat.h"
 #include "libavutil/opt.h"
@@ -82,6 +84,9 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
+
+    const auto Settings = GetDefault<UFFmpegMediaSettings>();
+
 
     if (!Archive.IsValid()) {//如果附件对象不可用，则获取Url
         if (Url.StartsWith(TEXT("file://")))//如果是文件开头
@@ -219,6 +224,26 @@ bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options)
     return ret;
 }
 
+bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options, const FMediaPlayerOptions* PlayerOptions)
+{
+    FName name = "nnnn";
+    FString dv = "";
+    FString name22 = Options->GetMediaOption(name, dv);
+    //打开新媒体之前，先关闭旧媒体
+    Close();
+    //如果媒体地址为空，直接返回
+    if (Url.IsEmpty())
+    {
+        UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p:Cannot open media from url(url is empty)"), this);
+        return false;
+    }
+    UE_LOG(LogFFmpegMedia, Log, TEXT("Player %p: Open Media Source[Url]: [%s]"), this, *Url);
+    //是否预加载(todo: 该参数无用)
+    const bool Precache = (Options != nullptr) ? Options->GetMediaOption("PrecacheFile", false) : false;
+    bool ret = InitializePlayer(nullptr, Url, Precache, nullptr);
+    return ret;
+}
+
 /** [UE4 IMediaPlayer]根据文件或内存归档和可选参数打开媒体源 */
 bool FFmpegMediaPlayer::Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions* Options)
 {
@@ -310,6 +335,17 @@ void FFmpegMediaPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
     {
         EventSink.ReceiveMediaEvent(Event);
     }
+}
+
+
+bool FFmpegMediaPlayer::FlushOnSeekStarted() const
+{
+    return false; //Seek开始时清除样本
+}
+
+bool FFmpegMediaPlayer::FlushOnSeekCompleted() const
+{
+    return true;
 }
 
 bool FFmpegMediaPlayer::GetPlayerFeatureFlag(EFeatureFlag flag) const

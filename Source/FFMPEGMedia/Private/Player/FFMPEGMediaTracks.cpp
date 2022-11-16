@@ -57,6 +57,7 @@ FFFmpegMediaTracks::FFFmpegMediaTracks()
 
     this->SelectedAudioTrack = INDEX_NONE; 
     this->SelectedCaptionTrack = INDEX_NONE;
+    this->SelectedMetadataTrack = INDEX_NONE;
     this->SelectedVideoTrack = INDEX_NONE;
    
     this->CurrentTime = FTimespan::Zero();// 当前播放时间
@@ -198,7 +199,7 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
         UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p:  create continue_read_thread fail"), this);
         goto fail;
     }
-     
+
     this->vidclk.Init(&this->videoq);
     this->audclk.Init(&this->audioq);
     this->extclk.Init(&this->extclk);
@@ -327,6 +328,7 @@ void FFFmpegMediaTracks::Shutdown()
 
     this->SelectedAudioTrack = INDEX_NONE;
     this->SelectedCaptionTrack = INDEX_NONE;
+    this->SelectedMetadataTrack = INDEX_NONE;
     this->SelectedVideoTrack = INDEX_NONE;
 
     this->CurrentTime = FTimespan::Zero();// 当前播放时间
@@ -337,6 +339,7 @@ void FFFmpegMediaTracks::Shutdown()
     this->AudioTracks.Empty();
     this->CaptionTracks.Empty();
     this->VideoTracks.Empty();
+    this->MetadataTracks.Empty();
     MediaInfo.Empty();
     ImgaeCopyDataBuffer.Reset();
     this->currentOpenStreamNumber = 0;
@@ -462,24 +465,27 @@ int FFFmpegMediaTracks::read_thread()
                     this->audioq.Flush();
                 if (this->subtitle_stream >= 0)
                     this->subtitleq.Flush();
-                if (this->video_stream >= 0)
+                if (this->video_stream >= 0) {
                     this->videoq.Flush();
+                }
                 if (this->seek_flags & AVSEEK_FLAG_BYTE) {
                     this->extclk.Set(NAN, 0);
                 }
                 else {
                     this->extclk.Set(seek_target / (double)AV_TIME_BASE, 0);
                 }
-                FlushSamples();
-                DeferredEvents.Enqueue(EMediaEvent::SeekCompleted); //会触发FlushSamples()调用;
             }
+          /*  UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p:  audioq[%d],subtitleq[%d],videoq:[%d], pictq:[%d], sampq:[%d]"), this, this->audioq.nb_packets, 
+                this->subtitleq.nb_packets, 
+                this->videoq.size,
+                this->pictq.size,
+                this->sampq.size
+            );*/
+            FlushSamples(); //清空样本
+            DeferredEvents.Enqueue(EMediaEvent::SeekCompleted); //也会触发FlushSamples()调用;
             this->seek_req = 0;
             this->queue_attachments_req = 1;
             this->eof = 0;
-            SetRate(1.0f);
-            if (this->paused) {
-                this->step_to_next_frame();
-            }
         }
         if (this->queue_attachments_req) {
             if (this->video_st && this->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC) {
@@ -765,8 +771,9 @@ int FFFmpegMediaTracks::DisplayThread()
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0)); //睡眠一段时间，防止无意义的频繁调用
         remaining_time = REFRESH_RATE; //默认屏幕刷新率控制，REFRESH_RATE = 10ms
-        if (!this->paused || this->force_refresh)
+        if (!this->paused || this->force_refresh) {
             video_refresh(&remaining_time);
+        }
     }
     UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p:  DisplayThread exit"), this);
     return 0;
@@ -823,7 +830,7 @@ retry:
             }
 
             if (vp->GetSerial() != this->videoq.serial) { //丢弃无效的Frame
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame"), this);
+                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame %d, %f"), this, vp->GetSerial(), vp->GetPts());
                 this->pictq.Next();
                 goto retry;
             }
@@ -975,7 +982,14 @@ FTimespan FFFmpegMediaTracks::RenderAudio()
             const TSharedRef<FFFmpegMediaAudioSample, ESPMode::ThreadSafe> AudioSample = AudioSamplePool->AcquireShared();
             if (AudioSample->Initialize((uint8_t*)this->audio_buf, len1, audio_tgt.NumChannels, audio_tgt.SampleRate, time, duration))
             {
+                //将样本对象放入样本队列中
+               /* if (AudioDropCounter.GetValue() != 0) {
+                    AudioDropCounter.Decrement();
+                    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks%p, AudioSample Drop %s, %d, Serial:%d"), this, *AudioSample.Get().GetTime().Time.ToString(), AudioDropCounter.GetValue(), this->videoq.GetSerial());
+                    return 0;
+                }*/
                 AudioSampleQueue.Enqueue(AudioSample);
+                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FFmpegMediaTracks%p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
             }
         }
     }
@@ -1028,7 +1042,7 @@ int FFFmpegMediaTracks::is_realtime(AVFormatContext* s)
         )
         return 1;
     if (s->pb && (!strncmp(s->url, "rtp:", 4)
-        || !strncmp(s->url, "udp:", 4) || !strncmp(s->url, "rtmp:", 5)
+        || !strncmp(s->url, "udp:", 4)
         )
         )
         return 1;
@@ -1501,18 +1515,18 @@ double FFFmpegMediaTracks::compute_target_delay(double delay)
            duplicating or deleting a frame */
         diff = this->vidclk.Get() - this->get_master_clock();
 
-        /* skip or repeat frame. We take into account the
-           delay to compute the threshold. I still don't know
-           if it is the best guess */
-        sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
-        if (!isnan(diff) && fabs(diff) < this->max_frame_duration) {
-            if (diff <= -sync_threshold)
-                delay = FFMAX(0, delay + diff);
-            else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
-                delay = delay + diff;
-            else if (diff >= sync_threshold)
-                delay = 2 * delay;
-        }
+/* skip or repeat frame. We take into account the
+   delay to compute the threshold. I still don't know
+   if it is the best guess */
+sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
+if (!isnan(diff) && fabs(diff) < this->max_frame_duration) {
+    if (diff <= -sync_threshold)
+        delay = FFMAX(0, delay + diff);
+    else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
+        delay = delay + diff;
+    else if (diff >= sync_threshold)
+        delay = 2 * delay;
+}
     }
 
     av_log(NULL, AV_LOG_TRACE, "video: delay=%0.3f A-V=%f\n",
@@ -1530,8 +1544,8 @@ void FFFmpegMediaTracks::update_video_pts(double pts, int64_t pos, int serial)
 /** 视频显示 */
 void FFFmpegMediaTracks::video_display()
 {
-   //只有一种显示模式，直接调用
-   video_image_display();
+    //只有一种显示模式，直接调用
+    video_image_display();
 }
 /** 视频图片显示 */
 void FFFmpegMediaTracks::video_image_display()
@@ -1554,8 +1568,8 @@ void FFFmpegMediaTracks::video_image_display()
                         sp->width = vp->width;
                         sp->height = vp->height;
                     }
-                   /* if (realloc_texture(&is->sub_texture, SDL_PIXELFORMAT_ARGB8888, sp->width, sp->height, SDL_BLENDMODE_BLEND, 1) < 0)
-                        return;*/
+                    /* if (realloc_texture(&is->sub_texture, SDL_PIXELFORMAT_ARGB8888, sp->width, sp->height, SDL_BLENDMODE_BLEND, 1) < 0)
+                         return;*/
 
                     for (i = 0; i < sp->sub.num_rects; i++) {
                         AVSubtitleRect* sub_rect = sp->sub.rects[i];
@@ -1565,19 +1579,19 @@ void FFFmpegMediaTracks::video_image_display()
                         sub_rect->w = av_clip(sub_rect->w, 0, sp->width - sub_rect->x);
                         sub_rect->h = av_clip(sub_rect->h, 0, sp->height - sub_rect->y);
 
-                       /* is->sub_convert_ctx = sws_getCachedContext(is->sub_convert_ctx,
-                            sub_rect->w, sub_rect->h, AV_PIX_FMT_PAL8,
-                            sub_rect->w, sub_rect->h, AV_PIX_FMT_BGRA,
-                            0, NULL, NULL, NULL);
-                        if (!is->sub_convert_ctx) {
-                            av_log(NULL, AV_LOG_FATAL, "Cannot initialize the conversion context\n");
-                            return;
-                        }
-                        if (!SDL_LockTexture(is->sub_texture, (SDL_Rect*)sub_rect, (void**)pixels, pitch)) {
-                            sws_scale(is->sub_convert_ctx, (const uint8_t* const*)sub_rect->data, sub_rect->linesize,
-                                0, sub_rect->h, pixels, pitch);
-                            SDL_UnlockTexture(is->sub_texture);
-                        }*/
+                        /* is->sub_convert_ctx = sws_getCachedContext(is->sub_convert_ctx,
+                             sub_rect->w, sub_rect->h, AV_PIX_FMT_PAL8,
+                             sub_rect->w, sub_rect->h, AV_PIX_FMT_BGRA,
+                             0, NULL, NULL, NULL);
+                         if (!is->sub_convert_ctx) {
+                             av_log(NULL, AV_LOG_FATAL, "Cannot initialize the conversion context\n");
+                             return;
+                         }
+                         if (!SDL_LockTexture(is->sub_texture, (SDL_Rect*)sub_rect, (void**)pixels, pitch)) {
+                             sws_scale(is->sub_convert_ctx, (const uint8_t* const*)sub_rect->data, sub_rect->linesize,
+                                 0, sub_rect->h, pixels, pitch);
+                             SDL_UnlockTexture(is->sub_texture);
+                         }*/
                     }
                     sp->uploaded = 1;
                 }
@@ -1599,6 +1613,7 @@ void FFFmpegMediaTracks::video_image_display()
 
 int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
 {
+
     //目标图像格式, 将帧中的像素统一转化成该格式
     AVPixelFormat targetPixelFormat = AV_PIX_FMT_RGBA;
     int ret = 0;
@@ -1660,6 +1675,12 @@ int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
                 duration))
             {
                 //将样本对象放入样本队列中
+                /*if (VideoDropCounter.GetValue() != 0) {
+                    VideoDropCounter.Decrement();
+                    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks%p, VideoSampleQueue Drop %s, %d, Serial:%d"), this, *TextureSample.Get().GetTime().Time.ToString(), VideoDropCounter.GetValue(), this->videoq.GetSerial());
+                    return ret;
+                }*/
+                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FFmpegMediaTracks%p, VideoSampleQueue Enqueue %s"), this, *TextureSample.Get().GetTime().Time.ToString());
                 VideoSampleQueue.Enqueue(TextureSample);
             }
         }
@@ -1752,8 +1773,8 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
         resampled_data_size = len2 * this->audio_tgt.ChannelLayout.nb_channels * av_get_bytes_per_sample(this->audio_tgt.Format);
     }
     else {
-        this->audio_buf = af->frame->data[0];
-        resampled_data_size = data_size;
+    this->audio_buf = af->frame->data[0];
+    resampled_data_size = data_size;
     }
 
     audio_clock0 = this->audio_clock;
@@ -1764,7 +1785,7 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
         this->audio_clock = NAN;
     this->audio_clock_serial = af->serial;
 
-    time = FTimespan::FromSeconds(this->audio_clock); 
+    time = FTimespan::FromSeconds(this->audio_clock);
     duration = FTimespan::FromSeconds(af->GetDuration());
     return resampled_data_size;
 }
@@ -1820,26 +1841,45 @@ int FFFmpegMediaTracks::stream_has_enough_packets(AVStream* st, int stream_id, F
         queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0);
 }
 
-
 bool FFFmpegMediaTracks::FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe>& OutSample)
 {
     TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe> Sample;
+    if (SeekTimeOptional.IsSet() && this->audio_st)//如果SeekTime时间设置且audio_st存在
+    {
+        while (true) {
+            if (AudioSampleQueue.Peek(Sample))
+            {
+                FTimespan SampleStartTime = Sample->GetTime().Time;
+                FTimespan SampleEndTime = SampleStartTime + Sample->GetDuration();
+                TRange<FTimespan> TimeRangeTime(SampleStartTime, SampleEndTime);
+                if (TimeRangeTime.Contains(SeekTimeOptional.GetValue())) {
+                    SeekTimeOptional.Reset();
+                    break;
+                }
+                else {
+                    AudioSampleQueue.Pop();
+                }
+            }
+            else {
+                break;
+            }
+        }
+        return false;
+    }
+
     if (!AudioSampleQueue.Peek(Sample))
     {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks[FetchAudio]: %p , peek a sample failed"), this);
         return false;
     }
 
     const FTimespan SampleTime = Sample->GetTime().Time;
     if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
     {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks[FetchAudio]: %p, sample not allow time range"), this);
         return false;
     }
 
     if (!AudioSampleQueue.Dequeue(Sample))
     {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks[FetchAudio]: %p, delete sample form queue failed"), this);
         return false;
     }
 
@@ -1849,38 +1889,90 @@ bool FFFmpegMediaTracks::FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMed
 
 bool FFFmpegMediaTracks::FetchCaption(TRange<FTimespan> TimeRange, TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe>& OutSample)
 {
-    return false;
+    TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe> Sample;
+
+    if (!CaptionSampleQueue.Peek(Sample))
+    {
+        return false;
+    }
+
+    const FTimespan SampleTime = Sample->GetTime().Time;
+
+    if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
+    {
+        return false;
+    }
+
+    if (!CaptionSampleQueue.Dequeue(Sample))
+    {
+        return false;
+    }
+
+    OutSample = Sample;
+
+    return true;
 }
 
 bool FFFmpegMediaTracks::FetchMetadata(TRange<FTimespan> TimeRange, TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe>& OutSample)
 {
-    return false;
+    TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe> Sample;
+
+    if (!MetadataSampleQueue.Peek(Sample))
+    {
+        return false;
+    }
+
+    const FTimespan SampleTime = Sample->GetTime().Time;
+
+    if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
+    {
+        return false;
+    }
+
+    if (!MetadataSampleQueue.Dequeue(Sample))
+    {
+        return false;
+    }
+
+    OutSample = Sample;
+
+    return true;
 }
 
 void FFFmpegMediaTracks::FlushSamples()
 {
-    UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FFmpegMediaTracks::FlushSamples"));
+    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks::FlushSamples"));
     AudioSampleQueue.RequestFlush();
     CaptionSampleQueue.RequestFlush();
     MetadataSampleQueue.RequestFlush();
     VideoSampleQueue.RequestFlush();
+    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks::FlushSamples ffff"));
 }
 
-/** 当音频不可用时，会读取视频时间，需要保证视频第一个样本时间有效，否则不会去读取样本，造成死锁 */
+/** 
+ * 获取视频样本时间
+ * 只有当视频时间无效时，才会请求
+ * 注意返回的值一定要有效，否则不会读取样本，造成无法播放
+ */
 bool FFFmpegMediaTracks::PeekVideoSampleTime(FMediaTimeStamp& TimeStamp)
 {
+    if (SeekTimeOptional.IsSet()) { //如果设置了SeekTime,直接返回该值
+        TimeStamp = FMediaTimeStamp(SeekTimeOptional.GetValue());
+        return true;
+    }
     TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
     if (!VideoSampleQueue.Peek(Sample))
     {
         return false;
     }
-  
     TimeStamp = FMediaTimeStamp(Sample->GetTime());
+    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks%p,PeekVideoSampleTime, %s"), this, *TimeStamp.Time.ToString());
     return true;
 }
 
 IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleForTimeRange(const TRange<FMediaTimeStamp>& TimeRange, TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& OutSample, bool bReverse)
 {
+    IMediaSamples::EFetchBestSampleResult Result = IMediaSamples::EFetchBestSampleResult::NoSample;
     //VeryVerbose
     // Don't return any samples if we are stopped. We could be prerolling.
     if (CurrentState == EMediaState::Stopped)
@@ -1888,22 +1980,18 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
         return IMediaSamples::EFetchBestSampleResult::NoSample;
     }
 
-    IMediaSamples::EFetchBestSampleResult Result = IMediaSamples::EFetchBestSampleResult::NoSample;
-    FTimespan TimeRangeLow = TimeRange.GetLowerBoundValue().Time;
-    FTimespan TimeRangeHigh = TimeRange.GetUpperBoundValue().Time;
-
-    
-    if (this->realtime) {
+    //处理Duration为0的情况，一般为实时流，默认按照顺序读取即可
+    if (Duration == 0) {
         while (true) {
             TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
             if (VideoSampleQueue.Peek(Sample))
             {
                 FTimespan SampleStartTime = Sample->GetTime().Time;
                 FTimespan SampleEndTime = SampleStartTime + Sample->GetDuration();//  *10;
-                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange looking at sample %f:%d %f"),
-                    SampleStartTime.GetTotalSeconds(), Sample->GetTime().SequenceIndex, SampleEndTime.GetTotalSeconds());
+               /* UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange looking at sample %f:%d %f"),
+                    SampleStartTime.GetTotalSeconds(), Sample->GetTime().SequenceIndex, SampleEndTime.GetTotalSeconds());*/
 
-                //// Yes. Use this sample.
+                    //// Yes. Use this sample.
                 if (!VideoSampleQueue.Dequeue(OutSample))
                 {
                     /*Result = IMediaSamples::EFetchBestSampleResult::Ok;
@@ -1923,42 +2011,50 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
         return Result;
     }
 
-   
+
+    FTimespan TimeRangeLow = TimeRange.GetLowerBoundValue().Time; //请求样本起始时间
+    FTimespan TimeRangeHigh = TimeRange.GetUpperBoundValue().Time;//请求样本结束时间
+
     // Account for loop wraparound.
-    if (TimeRangeHigh < TimeRangeLow)
+    if (TimeRangeHigh < TimeRangeLow) //如果样本结束时间<样本起始时间
     {
-        TimeRangeHigh += Duration;
+        TimeRangeHigh += Duration;  //样本结束时间 = 样本结束时间 + 时长
     }
-    TRange<FTimespan> TimeRangeTime(TimeRangeLow, TimeRangeHigh);
-    FTimespan LoopDiff = Duration * 0.5f;
-    float CurrentOverlap = 0.0f;
+    TRange<FTimespan> TimeRangeTime(TimeRangeLow, TimeRangeHigh); //重新设置请求范围
+    FTimespan LoopDiff = Duration * 0.5f; //时长一半
+    float CurrentOverlap = 0.0f;          //当前超过0
     
-    UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange %f:%d %f:%d seek:%f"),
+    /*UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange %f:%d %f:%d seek:%f"),
         TimeRangeLow.GetTotalSeconds(), 
         TimeRange.GetLowerBoundValue().SequenceIndex, 
         TimeRangeHigh.GetTotalSeconds(), 
         TimeRange.GetUpperBoundValue().SequenceIndex,
-        SeekTimeOptional.IsSet() ? SeekTimeOptional->GetTotalSeconds() : -1.0f);
+        SeekTimeOptional.IsSet() ? SeekTimeOptional->GetTotalSeconds() : -1.0f);*/
 
     // Loop over our samples.
     while (true)
     {
         // Is there a sample available?
         TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
-        if (VideoSampleQueue.Peek(Sample))
+        if (VideoSampleQueue.Peek(Sample))//取出一个样本
         {
-            FTimespan SampleStartTime = Sample->GetTime().Time;
-            FTimespan SampleEndTime = SampleStartTime + Sample->GetDuration();//  *10;
-            UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange looking at sample %f:%d %f"),
-                SampleStartTime.GetTotalSeconds(), Sample->GetTime().SequenceIndex, SampleEndTime.GetTotalSeconds());
+            FTimespan SampleStartTime = Sample->GetTime().Time; //样本起始时间
+            FTimespan SampleEndTime = SampleStartTime + Sample->GetDuration(); //样本结束时间
+          /*  UE_LOG(LogFFmpegMedia, Log, TEXT("FetchBestVideoSampleForTimeRange looking at sample %f:%d %f"),
+                SampleStartTime.GetTotalSeconds(), Sample->GetTime().SequenceIndex, SampleEndTime.GetTotalSeconds());*/
 
 
             // Are we waiting for the sample from a seek?
-            if (SeekTimeOptional.IsSet())
+            if (SeekTimeOptional.IsSet() && !this->audio_st)//如果SeekTime时间设置且audio_st不存在
             {
                 // Are we past the seek time?
-                if (TimeRangeTime.Contains(SeekTimeOptional.GetValue()) == false)
+                if (TimeRangeTime.Contains(SeekTimeOptional.GetValue()) == false) //如果SeekTime不在请求范围之内了，则重置SeekTimeOptional
                 {
+
+                    UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange SeekTimeOptional Reset not Contains  %s~%s  %s"),
+                        *TimeRangeTime.GetLowerBoundValue().ToString(),
+                        *TimeRangeTime.GetUpperBoundValue().ToString(),
+                        *SeekTimeOptional.GetValue().ToString());
                     SeekTimeOptional.Reset();
                 }
                 else
@@ -1966,17 +2062,25 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
                     // Is this our seek sample?
                     FTimespan SeekTime = SeekTimeOptional.GetValue();
                     double SeekTimeSeconds = SeekTime.GetTotalSeconds();
-                    if ((FMath::IsNearlyEqual(SeekTimeSeconds, SampleStartTime.GetTotalSeconds(), 0.001)) ||
-                        ((SeekTime >= SampleStartTime) && (SeekTime < SampleEndTime)))
+                    if ((FMath::IsNearlyEqual(SeekTimeSeconds, SampleStartTime.GetTotalSeconds(), 0.001)) || //如果Seek时间和样本起始时间相差0.001
+                        ((SeekTime >= SampleStartTime) && (SeekTime < SampleEndTime))) //或者(seek时间大于样本起始时间且小于样本结束时间)
                     {
                         // Yes this is what we have been waiting for.
                         // Reset the seek time so its no longer used.
-                        SeekTimeOptional.Reset();
+                        SeekTimeOptional.Reset(); //重置SeekTime
+                        UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange SeekTimeOptional Is this our seek sample  %s~%s  %s"),
+                            *TimeRangeTime.GetLowerBoundValue().ToString(),
+                            *TimeRangeTime.GetUpperBoundValue().ToString(),
+                            *Sample->GetTime().Time.ToString());
                     }
-                    else
+                    else  //不符合上述条件，说明该样本不符合要求，需要丢弃
                     {
                         // This is not the sample we want, its old.
                         VideoSampleQueue.Pop();
+                        UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange SeekTimeOptional drop  %s~%s  %s"),
+                            *TimeRangeTime.GetLowerBoundValue().ToString(),
+                            *TimeRangeTime.GetUpperBoundValue().ToString(),
+                            *Sample->GetTime().Time.ToString());
                         continue;
                     }
                 }
@@ -1984,16 +2088,16 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
 
 
             // Are we already past this sample?
-            if (SampleEndTime < TimeRangeLow)//样本结束时间小于请求开始时间，
+            if (SampleEndTime < TimeRangeLow)//样本结束时间小于请求样本开始时间
             {
                 // If there is a large gap to this sample, then its probably because it looped,
                 // so we aren't really past it.
-                FTimespan Diff = TimeRangeLow - SampleEndTime;
-                if (Diff > LoopDiff)
+                FTimespan Diff = TimeRangeLow - SampleEndTime; //获取相差时长
+                if (Diff > LoopDiff) //如果大于时长一半
                 {
                     // Adjust sample times so they are in the same "space" as the time range.
-                    SampleStartTime += Duration;
-                    SampleEndTime += Duration;
+                    SampleStartTime += Duration; //样本起始时间 = 样本起始时间 + 总时长
+                    SampleEndTime += Duration;   //样本结束时间 = 样本起始时间 + 总时长
                     UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange sample loop %f %f"),
                         SampleStartTime.GetTotalSeconds(), SampleEndTime.GetTotalSeconds());
                 }
@@ -2008,8 +2112,8 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
             {
                 // Did we already pass this sample,
                 // and the sample is at the end of the video and we just looped around?
-                FTimespan Diff = SampleEndTime - TimeRangeLow;
-                if (Diff > LoopDiff)
+                FTimespan Diff = SampleEndTime - TimeRangeLow; //获取样本结束时间与请求样本开始时间时间差
+                if (Diff > LoopDiff) //如果大于时长一半
                 {
                     VideoSampleQueue.Pop();
                     continue;
@@ -2017,7 +2121,7 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
 
 
                 // Is this sample before the end of the requested time range?
-                if (SampleStartTime < TimeRangeHigh)
+                if (SampleStartTime < TimeRangeHigh) //如果样本起始时间小于请求样本结束时间
                 {
                     // Yes.
                     // Does this sample have the largest overlap so far?
@@ -2032,8 +2136,8 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
                         {
                             Result = IMediaSamples::EFetchBestSampleResult::Ok;
                             CurrentOverlap = Overlap;
-                            LastFetchVideoTime = Sample->GetTime().Time.GetTotalSeconds();
-                            UE_LOG(LogFFmpegMedia, Log, TEXT("FetchBestVideoSampleForTimeRange %f"), Sample->GetTime().Time.GetTotalSeconds());
+                            LastFetchVideoTime = Sample->GetTime().Time.GetTotalSeconds(); //设置最后读取样本时间
+                            //UE_LOG(LogFFmpegMedia, Log, TEXT("FetchBestVideoSampleForTimeRange %f"), Sample->GetTime().Time.GetTotalSeconds());
                             UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FetchBestVideoSampleForTimeRange got sample."));
                         }
                     }
@@ -2092,8 +2196,8 @@ int32 FFFmpegMediaTracks::GetNumTracks(EMediaTrackType TrackType) const
         return AudioTracks.Num();
     case EMediaTrackType::Caption: //闭合字幕轨道
         return CaptionTracks.Num();
-    case EMediaTrackType::Metadata: // todo
-        return 0;
+    case EMediaTrackType::Metadata: 
+        return MetadataTracks.Num();
     //case EMediaTrackType::Script: 
     //    return 4;
     //case EMediaTrackType::Text: //文本轨道
@@ -2122,12 +2226,10 @@ int32 FFFmpegMediaTracks::GetNumTrackFormats(EMediaTrackType TrackType, int32 Tr
         }
 
     case EMediaTrackType::Metadata:
-       /* if (MetadataTracks.IsValidIndex(TrackIndex))
+        if (MetadataTracks.IsValidIndex(TrackIndex))
         {
             return 1;
-        }*/
-        return 1;
-
+        }
     case EMediaTrackType::Caption:
         if (CaptionTracks.IsValidIndex(TrackIndex))
         {
@@ -2137,7 +2239,6 @@ int32 FFFmpegMediaTracks::GetNumTrackFormats(EMediaTrackType TrackType, int32 Tr
     case EMediaTrackType::Video:
         if (VideoTracks.IsValidIndex(TrackIndex))
         {
-            //return VideoTracks[TrackIndex].Formats.Num();
             return 1;
         }
     default:
@@ -2153,13 +2254,10 @@ int32 FFFmpegMediaTracks::GetSelectedTrack(EMediaTrackType TrackType) const
     {
     case EMediaTrackType::Audio:
         return SelectedAudioTrack;
-
     case EMediaTrackType::Caption:
         return SelectedCaptionTrack;
-
-    //case EMediaTrackType::Metadata:
-        //return SelectedMetadataTrack;
-    //    break;
+    case EMediaTrackType::Metadata:
+        return SelectedMetadataTrack;
     case EMediaTrackType::Video:
         return SelectedVideoTrack;
     default:
@@ -2182,12 +2280,12 @@ FText FFFmpegMediaTracks::GetTrackDisplayName(EMediaTrackType TrackType, int32 T
         }
         break;
 
-    //case EMediaTrackType::Metadata:
-    //    /*if (MetadataTracks.IsValidIndex(TrackIndex))
-    //    {
-    //        return MetadataTracks[TrackIndex].DisplayName;
-    //    }*/
-    //    break;
+    case EMediaTrackType::Metadata:
+        if (MetadataTracks.IsValidIndex(TrackIndex))
+        {
+            return MetadataTracks[TrackIndex].DisplayName;
+        }
+        break;
 
     case EMediaTrackType::Caption:
         if (CaptionTracks.IsValidIndex(TrackIndex))
@@ -2225,10 +2323,12 @@ int32 FFFmpegMediaTracks::GetTrackFormat(EMediaTrackType TrackType, int32 TrackI
         }
         break;
     case EMediaTrackType::Metadata:
-      /*  if (MetadataTracks.IsValidIndex(TrackIndex))
+        if (MetadataTracks.IsValidIndex(TrackIndex))
         {
-            return &MetadataTracks[TrackIndex];
-        }*/
+            if (&MetadataTracks[TrackIndex] != nullptr) {
+                return 0;
+            }
+        }
         break;
     case EMediaTrackType::Caption:
         if (CaptionTracks.IsValidIndex(TrackIndex))
@@ -2251,7 +2351,6 @@ int32 FFFmpegMediaTracks::GetTrackFormat(EMediaTrackType TrackType, int32 TrackI
     }
 
     return INDEX_NONE;
-
 }
 
 FString FFFmpegMediaTracks::GetTrackLanguage(EMediaTrackType TrackType, int32 TrackIndex) const
@@ -2268,10 +2367,10 @@ FString FFFmpegMediaTracks::GetTrackLanguage(EMediaTrackType TrackType, int32 Tr
         break;
 
     case EMediaTrackType::Metadata:
-       /* if (MetadataTracks.IsValidIndex(TrackIndex))
+        if (MetadataTracks.IsValidIndex(TrackIndex))
         {
             return MetadataTracks[TrackIndex].Language;
-        }*/
+        }
         break;
 
     case EMediaTrackType::Caption:
@@ -2309,10 +2408,10 @@ FString FFFmpegMediaTracks::GetTrackName(EMediaTrackType TrackType, int32 TrackI
         break;
 
     case EMediaTrackType::Metadata:
-       /* if (MetadataTracks.IsValidIndex(TrackIndex))
+        if (MetadataTracks.IsValidIndex(TrackIndex))
         {
             return MetadataTracks[TrackIndex].Name;
-        }*/
+        }
         break;
 
     case EMediaTrackType::Caption:
@@ -2357,17 +2456,16 @@ bool FFFmpegMediaTracks::GetVideoTrackFormat(int32 TrackIndex, int32 FormatIndex
 
 bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex)
 {
-    //判断媒体是否打开，一定要判断
+
     if (!this->ic) {
         return false;
     }
 
     UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Selecting %s track %i"), this, *MediaUtils::TrackTypeToString(TrackType), TrackIndex);
+
     FScopeLock Lock(&CriticalSection);
 
-    //当前选择通道
     int32* SelectedTrack = nullptr;
-    //与当前选择通道类型相同的所有通道
     TArray<FTrack>* Tracks = nullptr;
 
     switch (TrackType)
@@ -2376,18 +2474,22 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
         SelectedTrack = &SelectedAudioTrack;
         Tracks = &AudioTracks;
         break;
+
     case EMediaTrackType::Caption:
         SelectedTrack = &SelectedCaptionTrack;
         Tracks = &CaptionTracks;
         break;
-    //case EMediaTrackType::Metadata:
-        /*SelectedTrack = &SelectedMetadataTrack;
-        Tracks = &MetadataTracks;*/
-        //break;
+
+    case EMediaTrackType::Metadata:
+        SelectedTrack = &SelectedMetadataTrack;
+        Tracks = &MetadataTracks;
+        break;
+
     case EMediaTrackType::Video:
         SelectedTrack = &SelectedVideoTrack;
         Tracks = &VideoTracks;
         break;
+
     default:
         return false; // unsupported track type
     }
@@ -2395,35 +2497,44 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
     check(SelectedTrack != nullptr);
     check(Tracks != nullptr);
 
-    //如果当前要选择的索引与已经选择的索引一致，则表示已经选择该轨道
     if (TrackIndex == *SelectedTrack)
     {
-        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: Already selected %s track %i"), this, *MediaUtils::TrackTypeToString(TrackType), TrackIndex);
         return true; // already selected
     }
 
-    //如果当前要选择的索引为空或者为不可用轨道索引，直接返回
     if ((TrackIndex != INDEX_NONE) && !Tracks->IsValidIndex(TrackIndex))
     {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks %p: Selecting %s track %i fail"), this, *MediaUtils::TrackTypeToString(TrackType), TrackIndex);
         return false; // invalid track
     }
 
+    // deselect stream for old track
+    if (*SelectedTrack != INDEX_NONE)
+    {
+        const DWORD StreamIndex = (*Tracks)[*SelectedTrack].StreamIndex;
+        this->stream_component_close(StreamIndex);
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Disabled stream %i"), this, StreamIndex);
+        *SelectedTrack = INDEX_NONE;
+        SelectionChanged = true;
+        this->currentOpenStreamNumber--;
+    }
 
-    // select stream for new track 选择新的轨道
-    if (TrackIndex != INDEX_NONE) { //如果要选择的轨道不为空
-        const int StreamIndex = (*Tracks)[TrackIndex].StreamIndex;
-
-        //如果轨道不是音频 或者 (是音频且启用音轨)，即关闭音轨的时候跳过音轨
-        if (TrackType != EMediaTrackType::Audio || (TrackType == EMediaTrackType::Audio)) {
-            this->stream_component_open(StreamIndex);
-            this->currentOpenStreamNumber++;
-            UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream %i"), this, StreamIndex);
+    // select stream for new track
+    if (TrackIndex != INDEX_NONE)
+    {
+        const DWORD StreamIndex = (*Tracks)[TrackIndex].StreamIndex;
+        int ret = this->stream_component_open(StreamIndex);
+       
+        if (ret < 0)
+        {
+            UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Failed to enable %s track %i (stream %i)"), this, *MediaUtils::TrackTypeToString(TrackType), TrackIndex, StreamIndex);
+            return false;
         }
+
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream %i"), this, StreamIndex);
 
         *SelectedTrack = TrackIndex;
         SelectionChanged = true;
-
+        this->currentOpenStreamNumber++;
         if (TrackType == EMediaTrackType::Video) {
             //开启显示线程
             if (!displayRunning) {
@@ -2431,11 +2542,8 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
                 displayThread = LambdaFunctionRunnable::RunThreaded("DisplayThread", [this]() {
                     DisplayThread();
                     });
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Start DisplayThread  success"), this);
             }
-        }
-        else if (TrackType == EMediaTrackType::Audio) {
-
+        } else if (TrackType == EMediaTrackType::Audio) {
             //在此处设置源音频格式和目标格式
             //添加轨道式AV_SAMPLE_FMT_S16已经固定了
             audio_src = (*Tracks)[TrackIndex].Format.Audio;
@@ -2449,16 +2557,16 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
                we correct audio sync only if larger than this threshold */
             this->audio_diff_threshold = (double)(this->audio_tgt.HardwareSize) / this->audio_tgt.BytesPerSec;
 
-            audioRunning = true;
-            audioRenderThread = LambdaFunctionRunnable::RunThreaded("AudioRenderThread", [this]() {
-                AudioRenderThread();
-                });
+            if (!displayRunning) {
+                audioRunning = true;
+                audioRenderThread = LambdaFunctionRunnable::RunThreaded("AudioRenderThread", [this]() {
+                    AudioRenderThread();
+                 });
+            }
             DeferredEvents.Enqueue(EMediaEvent::Internal_VideoSamplesUnavailable); //发送事件，
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Start AudioRenderThread success"), this);
         }
     }
-
-   return true;
+    return true;
 }
 
 bool FFFmpegMediaTracks::SetTrackFormat(EMediaTrackType TrackType, int32 TrackIndex, int32 FormatIndex)
@@ -2480,7 +2588,7 @@ bool FFFmpegMediaTracks::SetTrackFormat(EMediaTrackType TrackType, int32 TrackIn
         break;
 
     case EMediaTrackType::Metadata:
-      // Tracks = &MetadataTracks;
+        Tracks = &MetadataTracks;
         break;
 
     case EMediaTrackType::Video:
@@ -2521,25 +2629,34 @@ bool FFFmpegMediaTracks::SetVideoTrackFrameRate(int32 TrackIndex, int32 FormatIn
 
 bool FFFmpegMediaTracks::CanControl(EMediaControl Control) const
 {
-   // UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: CanControl"), this);
-    
+
+    FScopeLock Lock(&CriticalSection);
+
+    /*if (Control == EMediaControl::BlockOnFetch)
+    {
+        return true;
+    }*/
+
     if (Control == EMediaControl::Pause)
     {
-        //播放时，可以暂停
-        return (CurrentState == EMediaState::Playing);
+        return CurrentState == EMediaState::Playing; //播放时，可以暂停
     }
 
     if (Control == EMediaControl::Resume)
     {
-        return (CurrentState != EMediaState::Playing);
+        return CurrentState != EMediaState::Playing; //非播放时，可以继续播放
     }
 
-    if ((Control == EMediaControl::Scrub) || (Control == EMediaControl::Seek))
+    if (Control == EMediaControl::Scrub)
     {
-        //支持跳转操作
         return true;
     }
-    
+
+    if (Control == EMediaControl::Seek)
+    {
+        return Duration > FTimespan::Zero(); //当前时长大于0 todo:实时流判断？？？
+    }
+
     return false;
 }
 
@@ -2595,19 +2712,36 @@ bool FFFmpegMediaTracks::IsLooping() const
 
 bool FFFmpegMediaTracks::Seek(const FTimespan& Time)
 {
-    if ((Time < FTimespan::Zero()) || (Time > Duration))
+
+    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Seeking to %s"), this, *Time.ToString());
+
+    // validate seek
+    if (!CanControl(EMediaControl::Seek))
     {
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Invalid seek time %s (media duration is %s)"), this, *Time.ToString(), *Duration.ToString());
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Media source doesn't support seeking"), this);
         return false;
     }
 
-    //此处判断
-    if (this->seek_req) {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks %p: is seeking ..."), this);
+    FScopeLock Lock(&CriticalSection);
+
+    if ((CurrentState == EMediaState::Closed) || (CurrentState == EMediaState::Error))
+    {
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Cannot seek while closed or in error state"), this);
         return false;
     }
+
+    if ((Time < FTimespan::Zero()) || (Time > Duration))
+    {
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Session %p: Invalid seek time %s (media duration is %s)"), this, *Time.ToString(), *Duration.ToString());
+        return false;
+    }
+
+    if (this->seek_req) {
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: is seeking ..."), this);
+        return false;
+    }
+
     int64_t pos = Time.GetTicks() / 10; //需要跳转到位置
-    DeferredEvents.Enqueue(EMediaEvent::PlaybackEndReached);
     this->stream_seek(pos, 0, 0);
     SeekTimeOptional = Time;
     return true;
@@ -2627,6 +2761,7 @@ bool FFFmpegMediaTracks::SetLooping(bool Looping)
 */
 bool FFFmpegMediaTracks::SetRate(float Rate)
 {
+    FScopeLock Lock(&CriticalSection);
     this->CurrentRate = Rate; //设置播放速率
 
     if (FMath::IsNearlyZero(Rate)) //接近于0，停止播放

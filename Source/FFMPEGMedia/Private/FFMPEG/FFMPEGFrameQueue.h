@@ -85,7 +85,7 @@ public:
     int64_t LastPos();
     FCriticalSection* GetMutex();
     int GetRindexShown();
-private:
+public:
     FFmpegFrame* queue[FRAME_QUEUE_SIZE]; //队列元素
     int rindex; //读指针
     int windex; //写指针

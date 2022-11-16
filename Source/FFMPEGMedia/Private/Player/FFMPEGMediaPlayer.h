@@ -55,9 +55,12 @@ public:
 	virtual IMediaView& GetView() override;
 	/**根据Url和可选参数打开媒体源 */
 	virtual bool Open(const FString& Url, const IMediaOptions* Options) override;
+	virtual bool Open(const FString& Url, const IMediaOptions* Options, const FMediaPlayerOptions* PlayerOptions) override;
 	/**根据Url和可选参数以及播放器参数打开媒体源 */
 	virtual bool Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions* Options) override;
 	virtual void TickInput(FTimespan DeltaTime, FTimespan Timecode) override;
+	virtual bool FlushOnSeekStarted() const override;
+	virtual bool FlushOnSeekCompleted() const override;
 	/** 根据功能标识判断播放器功能是否支持 */
 	virtual bool GetPlayerFeatureFlag(EFeatureFlag flag) const override;
 protected:

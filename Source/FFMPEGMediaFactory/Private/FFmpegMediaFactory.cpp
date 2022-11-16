@@ -9,6 +9,10 @@
 #include "IMediaPlayerFactory.h"
 #include "FFmpegMedia.h"
 
+#if WITH_EDITOR
+#include "ISettingsModule.h"
+#include "FFmpegMediaSettings.h"
+#endif
 
 DEFINE_LOG_CATEGORY(LogFFmpegMediaFactory);
 
@@ -167,9 +171,40 @@ public:
 		{
 			UE_LOG(LogFFmpegMediaFactory, Log, TEXT("MediaModule load fail, can not register FFmpegMediaFactory"));
 		}
+
+#if WITH_EDITOR
+		// register settings
+		ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings");
+
+		if (SettingsModule != nullptr)
+		{
+			SettingsModule->RegisterSettings("Project", "Plugins", "FFmpegMedia",
+				LOCTEXT("FFmpegMediaSettingsName", "FFmpeg Media"),
+				LOCTEXT("FFmpegMediaSettingsDescription", "Configure the FFmpeg Media plug-in."),
+				GetMutableDefault<UFFmpegMediaSettings>()
+			);
+		}
+#endif //WITH_EDITOR
+
 	}
 	virtual void ShutdownModule() override {
+		// unregister player factory
+		auto MediaModule = FModuleManager::GetModulePtr<IMediaModule>("Media");
 
+		if (MediaModule != nullptr)
+		{
+			MediaModule->UnregisterPlayerFactory(*this);
+		}
+
+#if WITH_EDITOR
+		// unregister settings
+		ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings");
+
+		if (SettingsModule != nullptr)
+		{
+			SettingsModule->UnregisterSettings("Project", "Plugins", "FFmpegMedia");
+		}
+#endif //WITH_EDITOR
 	}
 
 private:

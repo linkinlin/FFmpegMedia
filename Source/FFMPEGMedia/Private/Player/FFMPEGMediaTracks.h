@@ -43,13 +43,6 @@ struct AVFormatContext;
 class FFFmpegMediaAudioSamplePool;
 class FFFmpegMediaTextureSamplePool;
 
-
-enum class ESynchronizationType : uint8 {
-	AudioMaster = 0,
-	VideoMaster,
-	ExternalClock
-};
-
 typedef struct AudioParams {
 	int freq;
 	AVChannelLayout ch_layout;
@@ -340,12 +333,18 @@ private:
 	/** 字幕轨道列表 The available caption tracks.初始化时填充值 */
 	TArray<FTrack> CaptionTracks;
 
+	/** The available metadata tracks. */
+	TArray<FTrack> MetadataTracks;
+
 
 	/** Index of the selected audio track. 当前选择的音频轨道 */
 	int32 SelectedAudioTrack;
 
 	/** Index of the selected caption track. 当前选择的字幕轨道 */
 	int32 SelectedCaptionTrack;
+	
+	/** Index of the selected caption track. 当前选择的字幕轨道 */
+	int32 SelectedMetadataTrack;
 
 	/** Index of the selected video track. 当前选择的视频轨道*/
 	int32 SelectedVideoTrack;
@@ -474,4 +473,8 @@ private:
 	RDFTContext* rdft;
 	int rdft_bits;
 	FFTSample* rdft_data;
+
+	/*FThreadSafeCounter VideoDropCounter;
+	FThreadSafeCounter AudioDropCounter;
+	FThreadSafeCounter StopCounter;*/
 };
