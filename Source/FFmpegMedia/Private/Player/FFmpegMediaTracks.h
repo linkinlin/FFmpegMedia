@@ -110,6 +110,11 @@ class FFFmpegMediaTracks
 	};
 
 public:
+	/**
+	 * 注意同一个Player实例只会初始化一次
+	 * 所以在构造器中初始化完成之后
+	 * Shutdown中必须完成部分数据初始化以及部分数据的重置，保证下次播放时为初始状态
+	 */
 	FFFmpegMediaTracks();
 	virtual ~FFFmpegMediaTracks();
 
@@ -155,7 +160,11 @@ public:
 	int AudioRenderThread();
 	/** 获取媒体事件 */
 	void GetEvents(TArray<EMediaEvent>& OutEvents);
-	/** 关闭轨道 */
+	/**
+	* 注意: UE4中ShutDown与ffplay中不一样，UE4中相当于重置到停止状态，需要复用的
+	* 按照先打开后关闭的原则进行资源的回收或者重置
+	* 为了保证回到初始化状态，除个别变量，其他所有变量都要
+	*/
 	void Shutdown();
 	/** 音频渲染 参考sdl_audio_callback*/
 	FTimespan RenderAudio();
@@ -165,7 +174,7 @@ public:
 	//~ IMediaSamples interface
 	virtual bool FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe>& OutSample) override;
 	virtual bool FetchCaption(TRange<FTimespan> TimeRange, TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe>& OutSample) override;
-	virtual bool FetchMetadata(TRange<FTimespan> TimeRange, TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe>& OutSample) override;
+	//virtual bool FetchMetadata(TRange<FTimespan> TimeRange, TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe>& OutSample) override;
 	/** 丢弃所有未完成的媒体样本, 何时触发参考MediaPlayerFacade中的 */
 	virtual void FlushSamples() override;
 	virtual bool PeekVideoSampleTime(FMediaTimeStamp& TimeStamp) override;
@@ -247,7 +256,7 @@ public:
 	virtual EMediaStatus GetStatus() const override;
 	/** 获取播放器支持帧率 */
 	virtual TRangeSet<float> GetSupportedRates(EMediaRateThinning Thinning) const override;
-	/** 获取当前播放时间(支持UsePlaybackTimingV2后，已经废弃，不会调用) */
+	///** 获取当前播放时间(支持UsePlaybackTimingV2后，已经废弃，不会调用) */
 	virtual FTimespan GetTime() const override;
 	/** 是否循环播放*/
 	virtual bool IsLooping() const override;
@@ -261,7 +270,9 @@ public:
 private:
 	/** 判断是否是实时流 */
 	int is_realtime(AVFormatContext* s);
-	/** 读取线程 */
+	/** 读取线程 
+	* 参考ffplay的read_thread方法实现
+	*/
 	int read_thread();
 	/** 判断是会否有足够的包 */
 	int stream_has_enough_packets(AVStream* st, int stream_id, FFmpegPacketQueue* queue);
@@ -291,7 +302,6 @@ private:
 	int upload_texture(FFmpegFrame* vp, AVFrame* frame);
 	/** 更新视频pts */
 	void update_video_pts(double pts, int64_t pos, int serial);
-	void step_to_next_frame();
 	/* pause or resume the video */
 	void stream_toggle_pause();
 	/* seek in the stream */
@@ -334,7 +344,7 @@ private:
 	TArray<FTrack> CaptionTracks;
 
 	/** The available metadata tracks. */
-	TArray<FTrack> MetadataTracks;
+	//TArray<FTrack> MetadataTracks;
 
 
 	/** Index of the selected audio track. 当前选择的音频轨道 */
@@ -344,13 +354,13 @@ private:
 	int32 SelectedCaptionTrack;
 	
 	/** Index of the selected caption track. 当前选择的字幕轨道 */
-	int32 SelectedMetadataTrack;
+	//int32 SelectedMetadataTrack;
 
 	/** Index of the selected video track. 当前选择的视频轨道*/
 	int32 SelectedVideoTrack;
 
 	FTimespan Duration; //总时长
-	FTimespan CurrentTime;// 当前播放时间
+	//FTimespan CurrentTime;// 当前播放时间
 	double CurrentRate;//当前播放速率
 
 	bool ShouldLoop;//循环播放
@@ -370,7 +380,7 @@ private:
 	/** Overlay sample queue. */
 	TMediaSampleQueue<IMediaOverlaySample> CaptionSampleQueue;
 	/** Metadata sample queue. */
-	TMediaSampleQueue<IMediaBinarySample> MetadataSampleQueue;
+	//TMediaSampleQueue<IMediaBinarySample> MetadataSampleQueue;
 	/** Video sample object pool. */
 	FFFmpegMediaTextureSamplePool* VideoSamplePool;
 	/** Video sample queue. */

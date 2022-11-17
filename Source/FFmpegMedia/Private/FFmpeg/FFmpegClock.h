@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 #include "FFmpegPacketQueue.h"
+/* no AV correction is done if too big error */
+#define AV_NOSYNC_THRESHOLD 10.0
 /**
  * 
  */

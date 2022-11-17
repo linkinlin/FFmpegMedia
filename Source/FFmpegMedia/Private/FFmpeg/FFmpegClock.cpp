@@ -5,8 +5,7 @@
 extern  "C" {
 #include "libavutil/time.h"
 }
-/* no AV correction is done if too big error */
-#define AV_NOSYNC_THRESHOLD 10.0
+
 
 FFmpegClock::FFmpegClock()
 {
