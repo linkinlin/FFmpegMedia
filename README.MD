@@ -1,23 +1,37 @@
 FFMPEG Media Plugin for unreal engine 
 ===================================
+## UE版本支持
+|  UE   | 是否支持  |
+|  ----  | ----  |
+| 4.x  | 不知道 |
+| 5.0  | 是 |
+| 5.1  | 是 |
 
-# Developing...!!! Developing...!!! Developing...!!!
+## 平台支持
+|  平台   | 是否支持  |
+|  ----  | ----  |
+| Windows | 支持 |
+| Mac  | 后续更新支持 |
+| Linux  | 后续更新支持 |
 
+## 文件类型支持
+|  平台   | 是否支持  |
+|  ----  | ----  |
+| mp4 | 支持 |
+| mp3  | 支持 |
+| mkv | 支持|
 
-A plugin that let's you use the FFMPEG library as media player
+## 协议类型支持
+|  平台   | 是否支持  |
+|  ----  | ----  |
+| rtmp | 支持 |
+| rtsp  | 支持 |
 
+### 基于ffmpeg实现，常见文件类型和协议类型理论上都可以播放
 
-## Features:
-   - Works on Windows and Mac
-   - Support for hardware accelerated codecs
-   - Support for videos with alpha   
+## 后续升级
+1. Linux和Mac平台支持
+2. 硬件解码支持
+3. rtsp以及rtmp参数配置
+4. 非标准编码支持
 
-## How to use
-
-1. The plugin works with Unreal 4.26
-2. You can clone the repository to `<Game>/Plugins/` or if you want you can use git submodules to your own git repository. Alternatively, you can copy to the `Engine/Plugins/` if you wish to make the plugin available to all of your projects.
-   > Do not forget to run UE4's `Generate Project Files` to account for these changes!
-3. Follow the steps to [play a video tutorial](https://docs.unrealengine.com/en-us/Engine/MediaFramework/HowTo/FileMediaSource) but insead of using the automatic player, choose the FFMPEGPlayer inside the players overrides for the step 5.
-
-
-![Player Overrrides](https://github.com/bakjos/FFMPEGMedia/raw/master/docs/mediatype.png)
