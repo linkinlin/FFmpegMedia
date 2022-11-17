@@ -41,7 +41,7 @@ public:
 
     void Abort(FFmpegFrameQueue* fq);
     void Destroy();
-private:
+public:
     AVPacket* pkt;
     FFmpegPacketQueue* queue;
     AVCodecContext* avctx;

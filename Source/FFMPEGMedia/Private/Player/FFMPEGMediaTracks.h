@@ -390,6 +390,9 @@ private:
 //ffmpeg变量
 private:
 	AVFormatContext* ic; //上下文
+	//AVCodecContext* video_avctx; //视频解码器codec上下文
+	//AVCodecContext* audio_avctx; //音频解码器codec上下文
+	//AVCodecContext* subtile_avctx; //字幕解码器codec上下文
 
 	FFmpegFrameQueue pictq; //图片解码帧队列(picture)
 	FFmpegFrameQueue subpq; //字幕解码帧队列(subtitle)
@@ -430,11 +433,18 @@ private:
 
 	int step; //逐帧播放  默认为0，没有实现 废弃
 
-	int64_t start_time = AV_NOPTS_VALUE;
-	int seek_req;
-	int seek_flags;
-	int64_t seek_pos;
-	int64_t seek_rel;
+
+	//seek 相关参数
+	//int64_t start_time = AV_NOPTS_VALUE;
+	int seek_req; //是否为seek请求
+	int seek_flags;//seek标识
+	int64_t seek_pos;//seek位置
+	int64_t seek_rel; //seek增量(可为负值)
+	double accurate_seek_time; //精准seek时间
+	int accurate_audio_seek_flag; //精准音频seek标识
+	int accurate_video_seek_flag; //精准视频seek标识
+	int accurate_subtitle_seek_flag; //精准字幕seek标识
+
 
 
 	int muted;
@@ -475,6 +485,7 @@ private:
 	FFTSample* rdft_data;
 
 	/*FThreadSafeCounter VideoDropCounter;
-	FThreadSafeCounter AudioDropCounter;
-	FThreadSafeCounter StopCounter;*/
+	FThreadSafeCounter AudioDropCounter; */
+	/*FThreadSafeCounter StopCounter;*/
+	/*int testStop = 0;*/
 };

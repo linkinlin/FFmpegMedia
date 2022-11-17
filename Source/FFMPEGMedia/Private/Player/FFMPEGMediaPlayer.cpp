@@ -340,12 +340,12 @@ void FFmpegMediaPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
 
 bool FFmpegMediaPlayer::FlushOnSeekStarted() const
 {
-    return false; //Seek开始时清除样本
+    return false; //Seek开始时清除样本，当前seek操作是基于异步完成的，所以seek开始前不需要请求样本，让其继续播放
 }
 
 bool FFmpegMediaPlayer::FlushOnSeekCompleted() const
 {
-    return true;
+    return true; //Seek完成时清除样本
 }
 
 bool FFmpegMediaPlayer::GetPlayerFeatureFlag(EFeatureFlag flag) const
