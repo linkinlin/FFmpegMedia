@@ -10,6 +10,7 @@
 #include "FFmpegMediaOverlaySample.h"
 #include "FFmpegMediaAudioSample.h"
 #include "FFmpegMediaTextureSample.h"
+#include "FFmpegMediaSettings.h"
 
  /* Minimum SDL audio buffer size, in samples. */
 #define AUDIO_MIN_BUFFER_SIZE 512
@@ -128,6 +129,7 @@ FFFmpegMediaTracks::FFFmpegMediaTracks()
      this->muted  = 0;
      this->frame_last_filter_delay = 0;
      this->LastFetchVideoTime = 0;
+     this->avCodecHWConfig = nullptr;
 }
 
 /** 析构函数 回收资源 */
@@ -370,6 +372,7 @@ void FFFmpegMediaTracks::Shutdown()
     //重要设置,清理之后，将中断操作重置为0
     this->abort_request = 0;
     this->LastFetchVideoTime = 0;
+    this->avCodecHWConfig = nullptr;
 }
 
 /** 追加流到轨道集合中 */
@@ -1732,6 +1735,8 @@ void FFFmpegMediaTracks::stream_seek(int64_t pos, int64_t rel, int by_bytes)
 /** 打开指定的流 */
 int FFFmpegMediaTracks::stream_component_open(int stream_index)
 {
+    const auto Settings = GetDefault<UFFmpegMediaSettings>(); //获取播放器配置
+
     AVCodecContext* avctx; //codec上下文
     const AVCodec* codec; //codec(解码器)
     const AVDictionaryEntry* t = NULL; //键值对
@@ -1763,8 +1768,41 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         goto fail;
     }
 
-    avctx->codec_id = codec->id;
+    /**硬件编码处理开始 */
+    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO && Settings->UseHardwareAcceleratedCodecs) { //如果启用了硬件编码且是视频流
+        avCodecHWConfig = this->FindBestDeviceType(codec);
+        if (avCodecHWConfig != nullptr) {
+            // 硬件解码器初始化
+            AVBufferRef* hw_device_ctx = nullptr;
+            ret = av_hwdevice_ctx_create(&hw_device_ctx, avCodecHWConfig->device_type, nullptr, nullptr, 0);
+            if (ret >= 0) {
+                avctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+                avctx->opaque = this;
+                avctx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) -> AVPixelFormat { //获取硬件编码格式(Lambda)
+                    FFFmpegMediaTracks* tracks = (FFFmpegMediaTracks*)ctx->opaque;
+                    const enum AVPixelFormat* p;
 
+                    for (p = pix_fmts; *p != -1; p++) {
+                        if (*p == tracks->avCodecHWConfig->pix_fmt)
+                            return *p;
+                    }
+
+                    UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Failed to get HW surface format"));
+                    return AV_PIX_FMT_NONE;
+                };
+                avctx->thread_safe_callbacks = 1;
+                UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Hw enable success"), this);
+            }
+            else {
+                UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: Hw enable fail"), this);
+                avCodecHWConfig = nullptr;
+                hw_device_ctx = nullptr;
+            }
+        }
+    }
+    /**硬件编码处理结束 */
+
+    avctx->codec_id = codec->id;
     if (stream_lowres > codec->max_lowres) { //低分辨率不能超过codec的编码器
         UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: The maximum value for lowres supported by the decoder is %d"), this, codec->max_lowres);
         stream_lowres = codec->max_lowres;
@@ -1821,6 +1859,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         break;
     case AVMEDIA_TYPE_VIDEO:
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[video] %i"), this, stream_index);
+        this->video_avctx = avctx;
         this->video_stream = stream_index;
         this->video_st = ic->streams[stream_index];
         ret = this->viddec->Init(avctx, &this->videoq, this->continue_read_thread);
@@ -1980,7 +2019,7 @@ int FFFmpegMediaTracks::video_thread()
     int ret;
     AVRational tb = this->video_st->time_base;
     AVRational frame_rate = av_guess_frame_rate(this->ic, this->video_st, NULL);
-
+    
     if (!frame) {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because alloc frame fail"), this);
         return AVERROR(ENOMEM);
@@ -2421,6 +2460,22 @@ int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
         return -1;
 
     if (got_picture) {
+
+        if (avCodecHWConfig != nullptr && frame->format == avCodecHWConfig->pix_fmt) { //判断帧的格式与硬件配置中的格式是否一致，如果一致表示是从GPU中获取的
+            AVFrame* sw_frame = av_frame_alloc();
+            /*sw_frame->format = AV_PIX_FMT_NV12;
+            sw_frame->format = AV_PIX_FMT_NONE;*/
+            int err = av_hwframe_transfer_data(sw_frame, frame, 0); //将数据从GPU读取到CPU中
+            if (err < 0) {
+                av_frame_free(&frame);
+                av_frame_free(&sw_frame);
+                return -1;
+            }
+            av_frame_copy_props(sw_frame, frame);//拷贝元数据字段
+            av_frame_unref(frame); //重置frame
+            av_frame_move_ref(frame, sw_frame); //将sw_frame字段全部拷贝到frame
+        }
+
         double dpts = NAN;
 
         if (frame->pts != AV_NOPTS_VALUE)
@@ -2627,6 +2682,7 @@ int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
         frame->width,  //输入图像的宽度
         frame->height, //输入图像的宽度
         ConvertDeprecatedFormat((AVPixelFormat)frame->format), //输入图像的像素格式
+        //(AVPixelFormat)frame->format, //输入图像的像素格式
         frame->width, //输出图像的宽度
         frame->height, //输出图像的高度
         AV_PIX_FMT_BGRA, //输出图像的像素格式
@@ -2712,6 +2768,38 @@ AVPixelFormat FFFmpegMediaTracks::ConvertDeprecatedFormat(AVPixelFormat format)
         return format;
         break;
     }
+}
+
+const AVCodecHWConfig* FFFmpegMediaTracks::FindBestDeviceType(const AVCodec* decoder)
+{
+    const AVCodecHWConfig* useConfig = nullptr;
+    TMap<enum AVHWDeviceType, const AVCodecHWConfig*> AVCodecHWConfigMaps;
+    //查找当前ffmpeg支持的所有硬件加速器配置
+    for (int i = 0;; i++) {
+        const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, i);
+        if (!config) {
+            break;
+        }
+        //
+        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) {
+            AVCodecHWConfigMaps.Add(config->device_type, config);
+            continue;
+        }
+    }
+
+    if (AVCodecHWConfigMaps.IsEmpty()) { //如果没有找到加速器配置，直接返回
+        return useConfig;
+    }
+    
+#if PLATFORM_WINDOWS
+    useConfig = AVCodecHWConfigMaps.FindRef(AV_HWDEVICE_TYPE_CUDA); //英伟达
+#elif PLATFORM_LINUX
+    useConfig = AVCodecHWConfigMaps.FindRef(AV_HWDEVICE_TYPE_CUDA);  //英伟达
+#elif PLATFORM_MAC
+    useConfig = AVCodecHWConfigMaps.FindRef(AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
+#endif
+
+    return  useConfig;
 }
 /*******************************************************************************************************************************************/
 

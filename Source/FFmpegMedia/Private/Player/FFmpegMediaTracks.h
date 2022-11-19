@@ -170,6 +170,8 @@ public:
 	FTimespan RenderAudio();
 	/** 转换废弃的编码 */
 	AVPixelFormat ConvertDeprecatedFormat(AVPixelFormat format);
+	/** 查找最优硬件解码设备 */
+	const AVCodecHWConfig* FindBestDeviceType(const AVCodec* decoder);
 public:
 	//~ IMediaSamples interface
 	virtual bool FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe>& OutSample) override;
@@ -400,7 +402,7 @@ private:
 //ffmpeg变量
 private:
 	AVFormatContext* ic; //上下文
-	//AVCodecContext* video_avctx; //视频解码器codec上下文
+	AVCodecContext* video_avctx; //视频解码器codec上下文
 	//AVCodecContext* audio_avctx; //音频解码器codec上下文
 	//AVCodecContext* subtile_avctx; //字幕解码器codec上下文
 
@@ -494,8 +496,13 @@ private:
 	int rdft_bits;
 	FFTSample* rdft_data;
 
+
+	//enum AVPixelFormat hw_pix_fmt; //AV_PIX_FMT_NONE
+	const AVCodecHWConfig* avCodecHWConfig;
 	/*FThreadSafeCounter VideoDropCounter;
 	FThreadSafeCounter AudioDropCounter; */
 	/*FThreadSafeCounter StopCounter;*/
 	/*int testStop = 0;*/
+
+	//AVFrame* sw_frame;
 };
