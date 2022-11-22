@@ -1809,8 +1809,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     }
     avctx->lowres = stream_lowres;
 
-    static int fast = 0; //todo:非标准化规范的多媒体兼容优化 默认为0
-    if (fast)
+    if (Settings->AllowFast)//非标准化规范的多媒体兼容优化
         avctx->flags2 |= AV_CODEC_FLAG2_FAST;
 
     AVDictionary* opts = {};
