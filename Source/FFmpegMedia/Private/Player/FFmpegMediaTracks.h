@@ -69,31 +69,30 @@ class FFFmpegMediaTracks
 	/**轨道格式 Track format. */
 	struct FFormat
 	{
-		enum AVMediaType MediaType; //媒体类型，轨道中包含的信息，比如视频、音频、字母等等
-		enum AVCodecID CodecID; //编码类型
-		FString TypeName; //类型名称
+		enum AVMediaType MediaType; //媒体类型，比如视频、音频、字幕等
+		enum AVCodecID CodecID;		//编码类型，比如h264、h265、mp3、aac等
+		FString TypeName;			//编码类型名称
 		
 		//音频结构
 		struct AudioFormat
 		{
-			uint32 FrameSize; //
-			uint32 NumChannels;
-			uint32 SampleRate;
-			AVChannelLayout ChannelLayout;
-			enum AVSampleFormat Format;
-			uint32 BytesPerSec;
-			uint32 HardwareSize;
+			uint32 SampleRate;				//音频采样率
+			AVChannelLayout ChannelLayout;  //音频通道布局
+			enum AVSampleFormat Format;     //音频采样格式(音频采样深度)
+			uint32 NumChannels;             //音频通道数 
+			uint32 FrameSize;               //音频帧大小
+			uint32 BytesPerSec;             //每秒字节数
+			uint32 HardwareSize;            //SDL_AudioSpec中表示样本中的音频缓冲区大小
 		}
 		Audio;
 
 		//视频结构
 		struct VideoFormat
 		{
-			int64_t BitRate;
-			float FrameRate;
-			FIntPoint OutputDim;
-			enum AVPixelFormat Format;
-			int  LineSize[4];
+			int64_t BitRate;             //视频码率
+			float FrameRate;             //视频帧率
+			FIntPoint OutputDim;         //视频尺寸
+			enum AVPixelFormat Format;   //视频图像色彩格式
 		}
 		Video;
 	};
@@ -442,8 +441,8 @@ private:
 	double frame_timer; //当前已经播放的帧的开始显示时间
 	int force_refresh; //画面强制刷新
 	int frame_drops_late; //统计视频播放时丢弃的帧数量
-
-	int step; //逐帧播放  默认为0，没有实现 废弃
+	double last_vis_time;
+	bool show_pic; //显示图片
 
 
 	//seek 相关参数
@@ -457,9 +456,6 @@ private:
 	int accurate_video_seek_flag; //精准视频seek标识
 	int accurate_subtitle_seek_flag; //精准字幕seek标识
 
-
-
-	int muted;
 	int video_stream;	 //当前打开的视频流(索引)
 	int subtitle_stream; //当前打开的字幕流(索引)
 	int audio_stream;    //当前打开的音频流(索引)
@@ -468,6 +464,16 @@ private:
 	AVStream* subtitle_st; //当前打开的字幕流
 	int64_t audio_callback_time; //音频回调时间，
 
+	int audio_hw_buf_size; //与SDL相关
+	uint8_t* audio_buf; //音频缓存
+	unsigned int audio_buf_size; /* in bytes */ //音频缓存大小
+	uint8_t* audio_buf1;
+	unsigned int audio_buf1_size;
+	double audio_diff_cum; /* used for AV difference average computation */
+	double audio_diff_avg_coef;
+	double audio_diff_threshold;
+	int audio_diff_avg_count;
+
 	int last_video_stream;
 	int	last_audio_stream;
 	int last_subtitle_stream;	
@@ -475,18 +481,6 @@ private:
 	double frame_last_filter_delay;
 	int frame_drops_early;
 
-
-	int audio_hw_buf_size; //与SDL相关
-	uint8_t* audio_buf; //音频缓存
-	unsigned int audio_buf_size; /* in bytes */ //音频缓存大小
-	uint8_t* audio_buf1;
-	unsigned int audio_buf1_size;
-						 
-	double audio_diff_cum; /* used for AV difference average computation */
-	double audio_diff_avg_coef;
-	double audio_diff_threshold;
-	int audio_diff_avg_count;
-	
 	int last_paused;
 	int read_pause_return;
 
@@ -496,13 +490,5 @@ private:
 	int rdft_bits;
 	FFTSample* rdft_data;
 
-
-	//enum AVPixelFormat hw_pix_fmt; //AV_PIX_FMT_NONE
 	const AVCodecHWConfig* avCodecHWConfig;
-	/*FThreadSafeCounter VideoDropCounter;
-	FThreadSafeCounter AudioDropCounter; */
-	/*FThreadSafeCounter StopCounter;*/
-	/*int testStop = 0;*/
-
-	//AVFrame* sw_frame;
 };

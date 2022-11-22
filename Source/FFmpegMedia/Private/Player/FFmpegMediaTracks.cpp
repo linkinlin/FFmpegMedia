@@ -123,13 +123,14 @@ FFFmpegMediaTracks::FFFmpegMediaTracks()
      this->frame_timer = 0; //当前已经播放的帧的开始显示时间
      this->force_refresh = 0; //画面强制刷新
      this->frame_drops_late = 0; //统计视频播放时丢弃的帧数量
-     this->step = 0;//逐帧播放  默认为0，没有实现 废弃
      this->frame_drops_early = 0;
 
-     this->muted  = 0;
      this->frame_last_filter_delay = 0;
      this->LastFetchVideoTime = 0;
      this->avCodecHWConfig = nullptr;
+
+     this->last_vis_time = 0.0;
+     this->show_pic = false; //显示图片
 }
 
 /** 析构函数 回收资源 */
@@ -216,7 +217,6 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d > 100, setting to 100"), this, startup_volume);
     startup_volume = av_clip(startup_volume, 0, 100);
     this->audio_volume = startup_volume;
-    this->muted = 0;
     this->av_sync_type = AV_SYNC_AUDIO_MASTER; //默认音频(此时同步只会使用音频时钟和外部时钟)
 
     unsigned  i;
@@ -363,11 +363,12 @@ void FFFmpegMediaTracks::Shutdown()
     this->frame_timer = 0; //当前已经播放的帧的开始显示时间
     this->force_refresh = 0; //画面强制刷新
     this->frame_drops_late = 0; //统计视频播放时丢弃的帧数量
-    this->step = 0;//逐帧播放  默认为0，没有实现 废弃
     this->frame_drops_early = 0;
 
-    this->muted = 0;
     this->frame_last_filter_delay = 0;
+
+    this->last_vis_time = 0.0;
+    this->show_pic = false; //显示图片
 
     //重要设置,清理之后，将中断操作重置为0
     this->abort_request = 0;
@@ -392,7 +393,6 @@ bool FFFmpegMediaTracks::AddStreamToTracks(uint32 StreamIndex, const FMediaPlaye
         return false;
     }
 
-
     //创建和添加轨道
     FTrack* Track = nullptr;
     int32 TrackIndex = INDEX_NONE;
@@ -404,7 +404,6 @@ bool FFFmpegMediaTracks::AddStreamToTracks(uint32 StreamIndex, const FMediaPlaye
         SelectedTrack = &SelectedAudioTrack; //设置当前轨道为选择的音频轨道
         TrackIndex = AudioTracks.AddDefaulted();//音频轨道添加一个默认轨道
         Track = &AudioTracks[TrackIndex]; //取出添加的默认轨道
-        //SelectedAudioTrack = TrackIndex;
     }
     //如果是字幕类型
     else if (MediaType == AVMEDIA_TYPE_SUBTITLE)
@@ -419,7 +418,6 @@ bool FFFmpegMediaTracks::AddStreamToTracks(uint32 StreamIndex, const FMediaPlaye
         SelectedTrack = &SelectedVideoTrack;
         TrackIndex = VideoTracks.AddDefaulted();
         Track = &VideoTracks[TrackIndex];
-        //SelectedVideoTrack = TrackIndex;
     }
 
     //检查添加的轨道是否为空
@@ -441,77 +439,57 @@ bool FFFmpegMediaTracks::AddStreamToTracks(uint32 StreamIndex, const FMediaPlaye
 
     if (MediaType == AVMEDIA_TYPE_AUDIO)
     {
-        int samples = FFMAX(AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(CodecParams->sample_rate / AUDIO_MAX_CALLBACKS_PER_SEC));
-        
+        int samples = FFMAX(AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(CodecParams->sample_rate / AUDIO_MAX_CALLBACKS_PER_SEC)); //基本是512、1024设置不合适可能会导致卡顿
         Track->Format = {
             MediaType,
             CodecParams->codec_id,
             TypeName,
             {
-                (uint32)av_samples_get_buffer_size(NULL, CodecParams->channels, 1, AV_SAMPLE_FMT_S16, 1),
-                (uint32)CodecParams->channels,
-                (uint32)CodecParams->sample_rate,
-                //(AVChannelLayout)CodecParams->channel_layout,
-                CodecParams->ch_layout,
-                AV_SAMPLE_FMT_S16,
-                (uint32)av_samples_get_buffer_size(NULL, CodecParams->channels, CodecParams->sample_rate,  AV_SAMPLE_FMT_S16, 1),
-                (uint32)av_samples_get_buffer_size(NULL, CodecParams->channels, samples, AV_SAMPLE_FMT_S16, 1)
+                (uint32)CodecParams->sample_rate, //音频采样率
+                CodecParams->ch_layout,           //音频通道布局
+                AV_SAMPLE_FMT_S16,                //音频采样格式(音频采样深度), 16bit通用标准，对于播放音频已经足够
+                (uint32)CodecParams->channels,    //音频通道数 
+                (uint32)av_samples_get_buffer_size(NULL, CodecParams->channels, 1, AV_SAMPLE_FMT_S16, 1),                                  //音频帧大小
+                (uint32)av_samples_get_buffer_size(NULL, CodecParams->channels, CodecParams->sample_rate, AV_SAMPLE_FMT_S16, 1),           //每秒字节数
             },
             {0}
         };
-
+        
         OutInfo += FString::Printf(TEXT("\t\tChannels: %i\n"), Track->Format.Audio.NumChannels);
         OutInfo += FString::Printf(TEXT("\t\tSample Rate: %i Hz\n"), Track->Format.Audio.SampleRate);
         OutInfo += FString::Printf(TEXT("\t\tBits Per Sample: %i\n"), Track->Format.Audio.FrameSize * 8);
     }
     else if (MediaType == AVMEDIA_TYPE_VIDEO) {
 
-        float fps = av_q2d(StreamDescriptor->r_frame_rate);
+        float fps = av_q2d(StreamDescriptor->r_frame_rate); //实际帧率
         if (fps < 0.000025) {
-            fps = av_q2d(StreamDescriptor->avg_frame_rate);
+            fps = av_q2d(StreamDescriptor->avg_frame_rate); //平均帧率
         }
-
-        OutInfo += FString::Printf(TEXT("\t\tFrame Rate: %g fps\n"), fps);
-
-        int line_sizes[4] = { 0 };
-        av_image_fill_linesizes(line_sizes, (AVPixelFormat)CodecParams->format, CodecParams->width);
-
         FIntPoint OutputDim = { CodecParams->width, CodecParams->height };
 
+        OutInfo += FString::Printf(TEXT("\t\tFrame Rate: %g fps\n"), fps);
         OutInfo += FString::Printf(TEXT("\t\tDimensions: %i x %i\n"), OutputDim.X, OutputDim.Y);
 
         Track->Format = {
             MediaType,
             CodecParams->codec_id,
             TypeName,
+            {0},
             {
-               0
-            },
-            {
-                0
+                CodecParams->bit_rate,             //视频码率
+                fps,                               //视频帧率
+                OutputDim,                         //视频尺寸
+               (AVPixelFormat)CodecParams->format, //视频图像色彩格式
             }
         };
-
-        Track->Format.Video.BitRate = CodecParams->bit_rate;
-        Track->Format.Video.OutputDim = OutputDim;
-        Track->Format.Video.FrameRate = fps;
-        Track->Format.Video.LineSize[0] = line_sizes[0];
-        Track->Format.Video.LineSize[1] = line_sizes[1];
-        Track->Format.Video.LineSize[2] = line_sizes[2];
-        Track->Format.Video.LineSize[3] = line_sizes[3];
-
     }
     else {
         Track->Format = {
             MediaType,
             CodecParams->codec_id,
             TypeName,
-            {
-               0
-            },
-            {
-               0
-            }
+            {0},
+            {0}
         };
     }
 
@@ -727,7 +705,7 @@ IMediaSamples::EFetchBestSampleResult FFFmpegMediaTracks::FetchBestVideoSampleFo
     }
 
     //处理Duration为0的情况，一般为实时流，默认按照顺序读取即可
-    if (Duration == 0) {
+    if (Duration == 0 || show_pic) { //时长为0或者显示图片时，直接返回即可
         while (true) {
             TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
             if (VideoSampleQueue.Peek(Sample))
@@ -1312,10 +1290,10 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
         } else if (TrackType == EMediaTrackType::Audio) {
             //在此处设置源音频格式和目标格式
             //添加轨道式AV_SAMPLE_FMT_S16已经固定了
-            audio_src = (*Tracks)[TrackIndex].Format.Audio;
-            audio_tgt = audio_src;
-            this->audio_hw_buf_size = this->audio_src.HardwareSize;
-            this->audio_buf_size = 0;
+            this->audio_src = (*Tracks)[TrackIndex].Format.Audio;  //音频源配置
+            this->audio_tgt = audio_src;                           //音频目标配置 
+            this->audio_hw_buf_size = this->audio_src.HardwareSize;//音频缓存区大小
+            this->audio_buf_size = 0;                              //音频缓存大小
             /* init averaging filter */
             this->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
             this->audio_diff_avg_count = 0;
@@ -1329,7 +1307,7 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
                     AudioRenderThread();
                  });
             }
-            DeferredEvents.Enqueue(EMediaEvent::Internal_VideoSamplesUnavailable); //发送事件，
+            DeferredEvents.Enqueue(EMediaEvent::Internal_VideoSamplesUnavailable); //发送事件，不要使用视频同步类型
         }
     }
     return true;
@@ -1614,8 +1592,10 @@ int FFFmpegMediaTracks::read_thread()
                 ret = av_packet_ref(pkt, &this->video_st->attached_pic);
                 if (ret < 0) {
                     UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: ReadThread attached_pic av_packet_ref fail"), this);
+                    this->show_pic = false;
                     continue;
                 }
+                this->show_pic = true; //应该处理精准跳转时丢弃图片帧问题todo
                 this->videoq.Put(pkt);
                 this->videoq.PutNullpacket(pkt, this->video_stream);
             }
@@ -2047,6 +2027,8 @@ int FFFmpegMediaTracks::video_thread()
                 this->accurate_video_seek_flag = 0;
             }
         }
+
+
         ret = queue_picture(frame, pts, duration, frame->pkt_pos, this->viddec->GetPktSerial());
         av_frame_unref(frame);
         if (ret < 0) {
@@ -2197,7 +2179,7 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
     int data_size, resampled_data_size;
     av_unused double audio_clock0;
     int wanted_nb_samples;
-    FFmpegFrame* af;
+    FFmpegFrame* af = NULL;
 
     if (this->paused)
         return -1;
@@ -2210,11 +2192,10 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
             return -1;
         this->sampq.Next();
     } while (af->serial != this->audioq.serial);
-    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels,
-        af->frame->nb_samples,
-        (AVSampleFormat)af->frame->format, 1);
 
-    wanted_nb_samples = synchronize_audio(af->frame->nb_samples);
+    //计算音频样本数据大小
+    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels, af->frame->nb_samples, (AVSampleFormat)af->frame->format, 1);
+    wanted_nb_samples = synchronize_audio(af->frame->nb_samples);//重设目标样本数
 
     if (af->frame->format != this->audio_src.Format ||
         av_channel_layout_compare(&af->frame->ch_layout, &this->audio_src.ChannelLayout) ||
@@ -2343,6 +2324,19 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
     if (!this->paused && this->get_master_sync_type() == AV_SYNC_EXTERNAL_CLOCK && this->realtime)
         this->check_external_clock_speed(); //同步外部时钟
 
+    //!display_disable && is->show_mode != SHOW_MODE_VIDEO && 
+    if (this->audio_st && show_pic) {//只有显示图片且音频存在时，才会直接显示
+        time = av_gettime_relative() / 1000000.0;
+        if (this->force_refresh || this->last_vis_time + rdftspeed < time) {
+            if ((this->pictq.size != 0)) {
+                video_display();
+            }
+            this->last_vis_time = time;
+        }
+        *remaining_time = FFMIN(*remaining_time, this->last_vis_time + rdftspeed - time);
+    }
+
+
     //此处删除音频波形显示代码
     if (this->video_st) {
     retry:
@@ -2395,7 +2389,7 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
                 FFmpegFrame* nextvp = this->pictq.PeekNext();
                 duration = this->vp_duration(vp, nextvp);
                 //重要判断time > this->frame_timer + duration，检查播放的帧是否已经过期
-                if (!this->step && (framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) && time > this->frame_timer + duration) {
+                if ((framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) && time > this->frame_timer + duration) {
                     this->frame_drops_late++;
                     this->pictq.Next();
                     goto retry;
@@ -2439,8 +2433,8 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
 
             this->pictq.Next();
             this->force_refresh = 1; //强制刷新
-            if (this->step && !this->paused) //todo: 暂时没有逐帧播放功能
-                this->stream_toggle_pause();
+            //if (this->step && !this->paused) //todo: 暂时没有逐帧播放功能
+            //    this->stream_toggle_pause();
         }
     display:
         /* display picture 注意retry中force_refresh的控制，决定是否显示画面*/
@@ -2658,7 +2652,7 @@ void FFFmpegMediaTracks::video_image_display()
     }
 
     //判断当前帧是否已经上传
-    if (!vp->uploaded) {
+    if (!vp->uploaded || show_pic) { //显示图片，直接再次上传(todo:待优化)
         if (upload_texture(vp, vp->frame) < 0) { //上传帧
             return;
         }
