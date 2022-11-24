@@ -2,12 +2,13 @@
 
 #include "FFmpegMediaFactory.h"
 #include "Modules/ModuleManager.h"
-#include "Core.h"
+//#include "Core.h"
 #include "Interfaces/IPluginManager.h"
 #include "IMediaModule.h"
 #include "IMediaOptions.h"
 #include "IMediaPlayerFactory.h"
 #include "FFmpegMedia.h"
+#include "Misc/Paths.h"
 
 #if WITH_EDITOR
 #include "ISettingsModule.h"

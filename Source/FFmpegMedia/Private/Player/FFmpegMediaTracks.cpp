@@ -143,7 +143,7 @@ FFFmpegMediaTracks::~FFFmpegMediaTracks()
 void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, const FMediaPlayerOptions* PlayerOptions)
 {
     UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing ..."), this);
-    
+
     if (PlayerOptions != nullptr)
     {
         this->MediaTrackOptions = PlayerOptions->Tracks;
@@ -168,6 +168,9 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
     this->last_video_stream = this->video_stream = -1;
     this->last_audio_stream = this->audio_stream = -1;
     this->last_subtitle_stream = this->subtitle_stream = -1;
+
+    int startup_volume = 100; //声音范围 set startup volume 0=min 100=max
+    unsigned  i;
 
     /* start video display */
     if (this->pictq.Init(&this->videoq, VIDEO_PICTURE_QUEUE_SIZE, 1) < 0) {  //初始化图片解码帧队列
@@ -210,7 +213,6 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
     CurrentState = EMediaState::Preparing;
 
     this->audio_clock_serial = -1;
-    int startup_volume = 100; //声音范围 set startup volume 0=min 100=max
     if (startup_volume < 0)
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d < 0, setting to 0"), this, startup_volume);
     if (startup_volume > 100)
@@ -219,7 +221,6 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
     this->audio_volume = startup_volume;
     this->av_sync_type = AV_SYNC_AUDIO_MASTER; //默认音频(此时同步只会使用音频时钟和外部时钟)
 
-    unsigned  i;
     for (i = 0; i < ic_->nb_streams; i++) {
         AVStream* st = ic->streams[i];
         enum AVMediaType type = st->codecpar->codec_type;
@@ -236,10 +237,11 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
     this->max_frame_duration = (ic->iformat->flags & AVFMT_TS_DISCONT) ? 10.0 : 3600.0;  ////设置帧最大时长
 
     //设置总时长
-    int64_t duration = ic->duration; //微秒us
-    this->Duration = duration *10; //转化必须乘以10，否则时间不对
+    //int64_t duration = ic->duration; //微秒us
+    this->Duration = ic->duration *10; //转化必须乘以10，否则时间不对
     this->realtime = is_realtime(ic);
-
+    
+    FlushSamples();
     DeferredEvents.Enqueue(EMediaEvent::MediaOpened); //发送事件，会触发SetRate(1.0f);
     //启动ReadThread
     this->read_tid = LambdaFunctionRunnable::RunThreaded(TEXT("ReadThread"), [this] {
@@ -327,7 +329,6 @@ void FFFmpegMediaTracks::Shutdown()
     this->SelectedVideoTrack = INDEX_NONE;
 
     this->CurrentRate = 0.0f; //当前播放速率
-
     this->AudioSamplePool->Reset();
     this->VideoSamplePool->Reset();
     this->AudioTracks.Empty();
@@ -581,7 +582,7 @@ FTimespan FFFmpegMediaTracks::RenderAudio()
                     return 0;
                 }*/
                 AudioSampleQueue.Enqueue(AudioSample);
-                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("FFmpegMediaTracks%p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
+                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
             }
         }
     }
@@ -1254,7 +1255,7 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
     // deselect stream for old track
     if (*SelectedTrack != INDEX_NONE)
     {
-        const DWORD StreamIndex = (*Tracks)[*SelectedTrack].StreamIndex;
+        const int StreamIndex = (*Tracks)[*SelectedTrack].StreamIndex;
         this->stream_component_close(StreamIndex);
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Disabled stream %i"), this, StreamIndex);
         *SelectedTrack = INDEX_NONE;
@@ -1265,7 +1266,7 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
     // select stream for new track
     if (TrackIndex != INDEX_NONE)
     {
-        const DWORD StreamIndex = (*Tracks)[TrackIndex].StreamIndex;
+        const int StreamIndex = (*Tracks)[TrackIndex].StreamIndex;
         int ret = this->stream_component_open(StreamIndex);
        
         if (ret < 0)
@@ -1284,7 +1285,7 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
             if (!displayRunning) {
                 displayRunning = true;
                 displayThread = LambdaFunctionRunnable::RunThreaded("DisplayThread", [this]() {
-                    DisplayThread();
+                        DisplayThread();
                     });
             }
         } else if (TrackType == EMediaTrackType::Audio) {
@@ -1725,6 +1726,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     int ret = 0;
     int lowres = 0; //todo 低分辨率，默认为0
     int stream_lowres = lowres;
+    AVDictionary* opts = {};
 
     if (stream_index < 0 || stream_index >= (int)ic->nb_streams) //如果流索引小于0或者超过总数量，返回-1
         return -1;
@@ -1792,7 +1794,6 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     if (Settings->AllowFast)//非标准化规范的多媒体兼容优化
         avctx->flags2 |= AV_CODEC_FLAG2_FAST;
 
-    AVDictionary* opts = {};
     if (!av_dict_get(opts, "threads", NULL, 0))
         av_dict_set(&opts, "threads", "auto", 0);
     if (stream_lowres)
@@ -1830,11 +1831,15 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
             this->auddec->SetStartPtsTb(this->audio_st->time_base);
         }
         //启用音频线程
-        if ((ret = auddec->Start([this](void* data) {return audio_thread();}, NULL)) < 0) {
+        if ((ret = auddec->Start(TEXT("AudioThread"), [this] { audio_thread();})) < 0) {
             av_dict_free(&opts);
             return ret;
         }
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: start a audio_thread"), this);
+      /*  if ((ret = auddec->Start([this](void* data) {return audio_thread();}, NULL)) < 0) {
+            av_dict_free(&opts);
+            return ret;
+        }*/
+        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p: start a audio_thread"), this);
         break;
     case AVMEDIA_TYPE_VIDEO:
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[video] %i"), this, stream_index);
@@ -1845,9 +1850,12 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         if (ret < 0)
             goto fail;
         //启用视频线程
-        if ((ret = viddec->Start([this](void* data) {return video_thread();}, NULL)) < 0) {
+        if ((ret = viddec->Start(TEXT("VideoThread"), [this] { video_thread();})) < 0) {
             goto out;
         }
+      /*  if ((ret = viddec->Start([this](void* data) {return video_thread();}, NULL)) < 0) {
+            goto out;
+        }*/
         this->queue_attachments_req = 1;
         break;
     case AVMEDIA_TYPE_SUBTITLE:
@@ -1858,7 +1866,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         if (ret < 0)
             goto fail;
         //启用字幕线程
-        if ((ret = subdec->Start([this](void* data) {return subtitle_thread();}, NULL)) < 0) {
+        if ((ret = subdec->Start(TEXT("SubtitleThread"), [this] { subtitle_thread();})) < 0) {
             goto out;
         }
         break;
@@ -2148,8 +2156,8 @@ double FFFmpegMediaTracks::get_master_clock()
 /** 同步外部时钟 */
 void FFFmpegMediaTracks::check_external_clock_speed()
 {
-    if (this->video_stream >= 0 && this->videoq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES ||
-        this->audio_stream >= 0 && this->audioq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES) {
+    if ((this->video_stream >= 0 && this->videoq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES) ||
+        (this->audio_stream >= 0 && this->audioq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES)) {
         this->extclk.SetSpeed(FFMAX(EXTERNAL_CLOCK_SPEED_MIN, this->extclk.GetSpeed() - EXTERNAL_CLOCK_SPEED_STEP));
     }
     else if ((this->video_stream < 0 || this->videoq.nb_packets > EXTERNAL_CLOCK_MAX_FRAMES) &&
@@ -2170,7 +2178,7 @@ int FFFmpegMediaTracks::stream_has_enough_packets(AVStream* st, int stream_id, F
     return stream_id < 0 ||
         queue->abort_request ||
         (st->disposition & AV_DISPOSITION_ATTACHED_PIC) ||
-        queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0);
+        (queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0));
 }
 
 /**音频解码*/
@@ -2651,19 +2659,50 @@ void FFFmpegMediaTracks::video_image_display()
         }
     }
 
-    //判断当前帧是否已经上传
-    if (!vp->uploaded || show_pic) { //显示图片，直接再次上传(todo:待优化)
+    //判断当前帧是否已经上传 || show_pic
+    if (!vp->uploaded) { //显示图片，直接再次上传(todo:待优化)
         if (upload_texture(vp, vp->frame) < 0) { //上传帧
             return;
         }
         vp->uploaded = 1;
         vp->flip_v = vp->frame->linesize[0] < 0;
     }
+    else {
+
+
+        {
+            //FScopeLock Lock(&CriticalSection);
+            ////从纹理样本池中获取一个共享对象
+            //const TSharedRef<FFFmpegMediaTextureSample, ESPMode::ThreadSafe> TextureSample = VideoSamplePool->AcquireShared();
+            ////根据帧初始化该对象
+            //FIntPoint Dim = { vp->frame->width,  vp->frame->height };
+            //FTimespan time = FTimespan::FromSeconds(0);
+            //if (!isnan(vp->GetPts())) {
+            //    time = FTimespan::FromSeconds(vp->GetPts());
+            //}
+            //FTimespan duration = FTimespan::FromSeconds(vp->GetDuration());
+            //if (TextureSample->Initialize(
+            //    ImgaeCopyDataBuffer.GetData(),
+            //    ImgaeCopyDataBuffer.Num(),
+            //    Dim,
+            //    vp->frame->linesize[0],
+            //    time + duration, //ps: 当只有视频时，视频的该值会当做播放时间，故会产生小于总时长1秒的情况，此处将时长与pts相加
+            //    duration))
+            //{
+            //    //将样本对象放入样本队列中
+            //    UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks%p: VideoSampleQueue Enqueue %s %s %s"), this, *TextureSample.Get().GetTime().Time.ToString(), *duration.ToString());
+            //    VideoSampleQueue.Enqueue(TextureSample);
+            //}
+        }
+    }
 }
 
 /** 上传图片 */
 int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
 {
+    if (frame->width == 0 || frame->height == 0) {
+        return -1;
+    }
 
     //目标图像格式, 将帧中的像素统一转化成该格式
     AVPixelFormat targetPixelFormat = AV_PIX_FMT_RGBA;

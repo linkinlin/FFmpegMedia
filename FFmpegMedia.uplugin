@@ -20,13 +20,13 @@
 			"Name": "FFmpegMedia",
 			"Type": "Runtime",
 			"LoadingPhase": "PostConfigInit",
-			"WhitelistPlatforms": [ "Win64" ]
+			"WhitelistPlatforms": [ "Win64", "Linux" ]
 		},
 		{
 			"Name": "FFmpegMediaFactory",
 			"Type": "RuntimeNoCommandlet",
 			"LoadingPhase": "PostEngineInit",
-			"WhitelistPlatforms": [ "Win64" ]
+			"WhitelistPlatforms": [ "Win64", "Linux" ]
 		}
 	]
 }

@@ -69,6 +69,10 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
     int err, ret;
     const AVDictionaryEntry* t;
     int scan_all_pmts_set = 0;
+    int genpts = 0; //生成pts, 默认为0
+    int orig_nb_streams = 0;
+    const auto Settings = GetDefault<UFFmpegMediaSettings>();
+    AVDictionary* format_opts = NULL;
 
     ic = avformat_alloc_context(); //分配上下文
     if (!ic) {
@@ -78,15 +82,11 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
     }
     ic->interrupt_callback.callback = decode_interrupt_cb; // 设置超时回调
     ic->interrupt_callback.opaque = this;
-    AVDictionary* format_opts = NULL;
   
     if (!av_dict_get(format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
-
-    const auto Settings = GetDefault<UFFmpegMediaSettings>();
-
 
     if (!Archive.IsValid()) {//如果附件对象不可用，则获取Url
         if (Url.StartsWith(TEXT("file://")))//如果是文件开头
@@ -127,13 +127,13 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
         goto fail;
     }
 
-    int genpts = 0; //生成pts, 默认为0
+   
     if (genpts)
         ic->flags |= AVFMT_FLAG_GENPTS;
 
     av_format_inject_global_side_data(ic);
 
-    int orig_nb_streams = ic->nb_streams;
+    orig_nb_streams = ic->nb_streams;
     err = avformat_find_stream_info(ic, NULL);
     if (err < 0) {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: could not find codec parameters."), this);

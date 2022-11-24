@@ -8,16 +8,10 @@ public class FFmpegMediaLibrary : ModuleRules
 	public FFmpegMediaLibrary(ReadOnlyTargetRules Target) : base(Target)
 	{
 		Type = ModuleType.External;
-
+		bool isLibrarySupported = false;
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
-			PublicIncludePaths.AddRange(
-			new string[] {
-				// ... add public include paths required here ...
-				Path.Combine(ModuleDirectory, "x64", "include")
-				}
-			);
-
+			isLibrarySupported = true;
 			// Add the import library
 			string[] libs = { "avcodec.lib", "avdevice.lib", "avfilter.lib", "avformat.lib", "avutil.lib", "postproc.lib", "swresample.lib", "swscale.lib" };
 			foreach (string lib in libs)
@@ -26,7 +20,7 @@ public class FFmpegMediaLibrary : ModuleRules
 			}
 
 			// Delay-load the DLL, so we can load it from the right place first
-			PublicDelayLoadDLLs.Add("ExampleLibrary.dll");
+			//PublicDelayLoadDLLs.Add("ExampleLibrary.dll");
 
 			// Ensure that the DLL is staged along with the executable
 			string[] dlls = { "avcodec-59.dll", "avdevice-59.dll", "avfilter-8.dll", "avformat-59.dll", "avutil-57.dll", "swresample-4.dll", "swscale-6.dll", "postproc-56.dll" };
@@ -43,15 +37,31 @@ public class FFmpegMediaLibrary : ModuleRules
 		}
         else if (Target.Platform == UnrealTargetPlatform.Mac)
         {
-            PublicDelayLoadDLLs.Add(Path.Combine(ModuleDirectory, "Mac", "Release", "libExampleLibrary.dylib"));
+			isLibrarySupported = true;
+			PublicDelayLoadDLLs.Add(Path.Combine(ModuleDirectory, "Mac", "Release", "libExampleLibrary.dylib"));
             RuntimeDependencies.Add("$(PluginDir)/Source/ThirdParty/FFmpegMediaLibrary/Mac/Release/libExampleLibrary.dylib");
         }
         else if (Target.Platform == UnrealTargetPlatform.Linux)
 		{
-			string ExampleSoPath = Path.Combine("$(PluginDir)", "Binaries", "ThirdParty", "FFmpegMediaLibrary", "Linux", "x86_64-unknown-linux-gnu", "libExampleLibrary.so");
-			PublicAdditionalLibraries.Add(ExampleSoPath);
-			PublicDelayLoadDLLs.Add(ExampleSoPath);
-			RuntimeDependencies.Add(ExampleSoPath);
+			isLibrarySupported = true;
+			string[] dlls = { "libavcodec.so.59.37.100", "libavdevice.so.59.7.100", "libavfilter.so.8.44.100", "libavformat.so.59.27.100", "libavutil.so.57.28.100", "libpostproc.so.56.6.100", "libswresample.so.4.7.100", "libswscale.so.6.7.100" };
+			foreach (string dll in dlls)
+			{
+				string LinuxSoPath = Path.Combine("$(PluginDir)", "Binaries", "ThirdParty", "FFmpegMediaLibrary", "Linux", "x86_64", dll);
+				PublicAdditionalLibraries.Add(LinuxSoPath);
+				PublicDelayLoadDLLs.Add(LinuxSoPath);
+				RuntimeDependencies.Add(LinuxSoPath);
+			}
+		}
+		if (isLibrarySupported)
+		{
+			// Include path
+			PublicIncludePaths.AddRange(
+			new string[] {
+				// ... add public include paths required here ...
+				Path.Combine(ModuleDirectory, "x64", "include")
+				}
+			);
 		}
 	}
 }

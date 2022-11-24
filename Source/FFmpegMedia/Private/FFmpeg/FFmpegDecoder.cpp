@@ -2,6 +2,7 @@
 
 
 #include "FFmpeg/FFmpegDecoder.h"
+#include "LambdaFunctionRunnable.h"
 
 FFmpegDecoder::FFmpegDecoder()
 {
@@ -22,6 +23,7 @@ int FFmpegDecoder::Init(AVCodecContext* avctx_, FFmpegPacketQueue* queue_, FFmpe
     this->empty_queue_cond = empty_queue_cond_;
     this->start_pts = AV_NOPTS_VALUE;
     this->pkt_serial = -1;
+    this->decoder_thread = NULL;
     return 0;
 }
 
@@ -131,18 +133,40 @@ void FFmpegDecoder::SetStartPtsTb(AVRational start_pts_tb_)
      this->start_pts_tb = start_pts_tb_;
 }
 
-int FFmpegDecoder::Start(std::function<int(void*)> thread_func, void* arg)
+//int FFmpegDecoder::Start(std::function<int(void*)> thread_func, void* arg)
+//{
+//    queue->Start();
+//    std::thread cpp_thread(thread_func, arg);
+//    decoder_tid = new std::thread(std::move(cpp_thread));
+//    if (!decoder_tid) {
+//        //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
+//        return AVERROR(ENOMEM);
+//    };
+//    return 0;
+//}
+//
+//int FFmpegDecoder::Start(FRunnable* frunnable, void* arg)
+//{
+//    queue->Start();
+//    decoder_thread = FRunnableThread::Create(frunnable, TEXT("DecoderThread"));
+//    if (!decoder_thread) {
+//        //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
+//        return AVERROR(ENOMEM);
+//    };
+//    return 0;
+//}
+
+int FFmpegDecoder::Start(FString threadName, std::function<void()> f)
 {
     queue->Start();
-    std::thread cpp_thread(thread_func, arg);
-    decoder_tid = new std::thread(std::move(cpp_thread));
-    if (!decoder_tid) {
+    decoder_thread = LambdaFunctionRunnable::RunThreaded(threadName, f);
+    if (!decoder_thread) {
         //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
         return AVERROR(ENOMEM);
     };
     return 0;
 }
-   
+
 int FFmpegDecoder::GetPktSerial()
 {
     return this->pkt_serial;
@@ -162,14 +186,20 @@ void FFmpegDecoder::Abort(FFmpegFrameQueue* fq)
 {
     this->queue->Abort();
     fq->Signal();
-    try {
+
+    if (this->decoder_thread) {
+        this->decoder_thread->WaitForCompletion();
+        this->decoder_thread = NULL;
+    }
+
+ /*   try {
         if (this->decoder_tid->joinable()) {
             decoder_tid->join();
         }
     }
     catch (std::system_error&) {
     }
-    delete decoder_tid;
+    delete decoder_tid;*/
     this->queue->Flush();
 }
 

@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "CoreMinimal.h"
+//#include "CoreMinimal.h"
 #include "IMediaSamples.h"
 #include "IMediaTracks.h"
 
@@ -15,7 +15,7 @@
 #include "IMediaControls.h"
 #include "Math/IntPoint.h"
 #include "Templates/SharedPointer.h"
-#include "Windows/AllowWindowsPlatformTypes.h"
+//#include "Windows/AllowWindowsPlatformTypes.h"
 #include "MediaPlayerOptions.h"
 #include "FFmpegFrameQueue.h"
 #include "FFmpegPacketQueue.h"
@@ -491,4 +491,5 @@ private:
 	FFTSample* rdft_data;
 
 	const AVCodecHWConfig* avCodecHWConfig;
+	//FRunnable* test1;
 };

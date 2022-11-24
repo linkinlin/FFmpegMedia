@@ -26,13 +26,13 @@ int FFmpegFrameQueue::Init(FFmpegPacketQueue* pktq_, int max_size_, int keep_las
     int i;
     this->mutex = new FCriticalSection();
     if (!this->mutex) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n");
+        av_log(NULL, AV_LOG_FATAL, "FFmpegFrameQueue CreateMutex Fail\n");
         return AVERROR(ENOMEM);
     }
 
     this->cond = new FFmpegCond();
     if (!this->cond) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n");
+        av_log(NULL, AV_LOG_FATAL, "FFmpegFrameQueue CreateCond Fail\n");
         return AVERROR(ENOMEM);
     }
 
@@ -56,6 +56,14 @@ void FFmpegFrameQueue::Destory()
             av_frame_free(&frame);
         }
     }
+    //与ffplay不同, 因为会重复利用，所以此处尽可能重置所有字段
+   /* rindex = 0;
+    windex = 0;
+    size = 0;
+    max_size = 0;
+    keep_last = 0;
+    rindex_shown = 0;
+    pktq = NULL;*/
     //SDL_DestroyMutex(f->mutex);
     //SDL_DestroyCond(f->cond);
 }

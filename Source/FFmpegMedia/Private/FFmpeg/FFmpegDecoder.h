@@ -5,7 +5,7 @@
 #include "CoreMinimal.h"
 #include "FFmpegPacketQueue.h"
 #include "FFmpegFrameQueue.h"
-#include <functional>
+//#include <functional>
 #include "FFmpegCond.h"
 extern "C" {
     #include <libavcodec/avcodec.h>
@@ -33,8 +33,9 @@ public:
 
     void SetStartPts(int64_t start_pts_);
     void SetStartPtsTb(AVRational start_pts_tb_);
-
-    int Start(std::function<int(void*)> thread_func, void* arg);
+    //int  Start(FRunnable* f2runnable, void* arg);
+    //int Start(std::function<int(void*)> thread_func, void* arg);
+    int Start(FString threadName, std::function<void()> f);
     int GetPktSerial();
     AVCodecContext* GetAvctx();
     int GetFinished();
@@ -55,4 +56,5 @@ public:
     AVRational next_pts_tb;
     std::thread* decoder_tid;
     FThread* decoder_tid_tmp;
+    FRunnableThread* decoder_thread;
 };

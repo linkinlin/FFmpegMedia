@@ -87,12 +87,12 @@ int FFmpegPacketQueue::Init()
         return AVERROR(ENOMEM);
     this->mutex = new FCriticalSection();
     if (!this->mutex) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n");
+        av_log(NULL, AV_LOG_FATAL, "FFmpegPacketQueue CreateMutex fail\n");
         return AVERROR(ENOMEM);
     }
     this->cond = new FFmpegCond();
     if (!this->cond) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n");
+        av_log(NULL, AV_LOG_FATAL, "FFmpegPacketQueue CreateCond() fail\n");
         return AVERROR(ENOMEM);
     }
     this->abort_request = 1;
