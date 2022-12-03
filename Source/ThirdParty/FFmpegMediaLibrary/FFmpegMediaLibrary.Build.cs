@@ -38,9 +38,17 @@ public class FFmpegMediaLibrary : ModuleRules
         else if (Target.Platform == UnrealTargetPlatform.Mac)
         {
 			isLibrarySupported = true;
-			PublicDelayLoadDLLs.Add(Path.Combine(ModuleDirectory, "Mac", "Release", "libExampleLibrary.dylib"));
-            RuntimeDependencies.Add("$(PluginDir)/Source/ThirdParty/FFmpegMediaLibrary/Mac/Release/libExampleLibrary.dylib");
-        }
+			/*PublicDelayLoadDLLs.Add(Path.Combine(ModuleDirectory, "Mac", "Release", "libExampleLibrary.dylib"));
+            RuntimeDependencies.Add("$(PluginDir)/Source/ThirdParty/FFmpegMediaLibrary/Mac/Release/libExampleLibrary.dylib");*/
+
+			string[] dlls = { "libavcodec.59.dylib", "libavdevice.59.dylib", "libavfilter.8.dylib", "libavformat.59.dylib", "libavutil.57.dylib", "libpostproc.56.dylib", "libswresample.4.dylib", "libswscale.6.dylib" };
+			foreach (string dll in dlls)
+			{
+				string LinuxSoPath = Path.Combine("$(PluginDir)", "Binaries", "ThirdParty", "FFmpegMediaLibrary", "Mac", dll);
+				PublicDelayLoadDLLs.Add(LinuxSoPath);
+				RuntimeDependencies.Add(LinuxSoPath);
+			}
+		}
         else if (Target.Platform == UnrealTargetPlatform.Linux)
 		{
 			isLibrarySupported = true;
