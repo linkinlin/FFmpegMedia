@@ -3,18 +3,24 @@
 
 #include "FFmpeg/FFmpegCond.h"
 #include "FFmpegCond.h"
-#include "GenericPlatform/GenericPlatformProcess.h"
+//#include "GenericPlatform/GenericPlatformProcess.h"
+
+#include "HAL/Event.h"
+#include "HAL/PlatformProcess.h"
 
 FFmpegCond::FFmpegCond()
 {
-	event = FGenericPlatformProcess::GetSynchEventFromPool();
+	//event = FGenericPlatformProcess::GetSynchEventFromPool();
+	event = FPlatformProcess::GetSynchEventFromPool(true);
 }
 
 FFmpegCond::~FFmpegCond()
 {
-	if (event) {
+	/*if (event) {
 		FGenericPlatformProcess::ReturnSynchEventToPool(event);
-	}
+	}*/
+	event->Trigger();
+	FPlatformProcess::ReturnSynchEventToPool(event);
 }
 
 void FFmpegCond::signal()

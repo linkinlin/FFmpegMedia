@@ -384,7 +384,7 @@ FGuid FFmpegMediaPlayer::GetPlayerPluginGUID() const
 
 IMediaSamples& FFmpegMediaPlayer::GetSamples()
 {
-    return *Tracks;
+    return Tracks->GetSamples();
 }
 
 FString FFmpegMediaPlayer::GetStats() const

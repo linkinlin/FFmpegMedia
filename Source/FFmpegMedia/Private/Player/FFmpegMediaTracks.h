@@ -15,7 +15,6 @@
 #include "IMediaControls.h"
 #include "Math/IntPoint.h"
 #include "Templates/SharedPointer.h"
-//#include "Windows/AllowWindowsPlatformTypes.h"
 #include "MediaPlayerOptions.h"
 #include "FFmpegFrameQueue.h"
 #include "FFmpegPacketQueue.h"
@@ -39,7 +38,7 @@ extern  "C" {
 }
 
 struct AVFormatContext;
-
+class FMediaSamples;
 class FFFmpegMediaAudioSamplePool;
 class FFFmpegMediaTextureSamplePool;
 
@@ -61,8 +60,7 @@ enum {
  * 
  */
 class FFFmpegMediaTracks
-	: public IMediaSamples
-	, public IMediaTracks
+	: public IMediaTracks
 	, public IMediaControls
 {
 
@@ -171,18 +169,7 @@ public:
 	AVPixelFormat ConvertDeprecatedFormat(AVPixelFormat format);
 	/** 查找最优硬件解码设备 */
 	const AVCodecHWConfig* FindBestDeviceType(const AVCodec* decoder);
-public:
-	//~ IMediaSamples interface
-	virtual bool FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe>& OutSample) override;
-	virtual bool FetchCaption(TRange<FTimespan> TimeRange, TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe>& OutSample) override;
-	//virtual bool FetchMetadata(TRange<FTimespan> TimeRange, TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe>& OutSample) override;
-	/** 丢弃所有未完成的媒体样本, 何时触发参考MediaPlayerFacade中的 */
-	virtual void FlushSamples() override;
-	virtual bool PeekVideoSampleTime(FMediaTimeStamp& TimeStamp) override;
-	virtual EFetchBestSampleResult FetchBestVideoSampleForTimeRange(const TRange<FMediaTimeStamp>& TimeRange, TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& OutSample, bool bReverse) override;
-	/** 当前实现无用，该方法会在EFeatureFlag::UsePlaybackTimingV2特性下调用 */
-	//virtual bool FetchVideo(TRange<FTimespan> TimeRange, TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& OutSample) override;
-	//virtual bool FetchVideo(TRange<FMediaTimeStamp> TimeRange, TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& OutSample) override;
+	IMediaSamples& GetSamples();
 public:
 	//~ IMediaTracks interface
 	/**
@@ -334,7 +321,6 @@ private:
 	/** 媒体选项 */
 	FMediaPlayerTrackOptions MediaTrackOptions;
 
-
 	/** 音频轨道列表 The available audio tracks. 初始化时填充值 */
 	TArray<FTrack> AudioTracks;
 
@@ -344,24 +330,17 @@ private:
 	/** 字幕轨道列表 The available caption tracks.初始化时填充值 */
 	TArray<FTrack> CaptionTracks;
 
-	/** The available metadata tracks. */
-	//TArray<FTrack> MetadataTracks;
-
-
 	/** Index of the selected audio track. 当前选择的音频轨道 */
 	int32 SelectedAudioTrack;
 
 	/** Index of the selected caption track. 当前选择的字幕轨道 */
 	int32 SelectedCaptionTrack;
-	
-	/** Index of the selected caption track. 当前选择的字幕轨道 */
-	//int32 SelectedMetadataTrack;
 
 	/** Index of the selected video track. 当前选择的视频轨道*/
 	int32 SelectedVideoTrack;
 
 	FTimespan Duration; //总时长
-	//FTimespan CurrentTime;// 当前播放时间
+
 	double CurrentRate;//当前播放速率
 
 	bool ShouldLoop;//循环播放
@@ -369,6 +348,7 @@ private:
 	//视频是否播放中
 	bool             displayRunning;
 	FRunnableThread* displayThread;
+
 	//音频是否播放中
 	bool             audioRunning;
 	FRunnableThread* audioRenderThread;
@@ -377,15 +357,8 @@ private:
 
 	/** Audio sample object pool. */
 	FFFmpegMediaAudioSamplePool* AudioSamplePool;
-	TMediaSampleQueue<IMediaAudioSample> AudioSampleQueue;
-	/** Overlay sample queue. */
-	TMediaSampleQueue<IMediaOverlaySample> CaptionSampleQueue;
-	/** Metadata sample queue. */
-	//TMediaSampleQueue<IMediaBinarySample> MetadataSampleQueue;
 	/** Video sample object pool. */
 	FFFmpegMediaTextureSamplePool* VideoSamplePool;
-	/** Video sample queue. */
-	TMediaSampleQueue<IMediaTextureSample> VideoSampleQueue;
 
 	//定义一个媒体事件队列，通过TickInput将事件读取并发送
 	/** Media events to be forwarded to main thread. */
@@ -395,9 +368,8 @@ private:
 	FFormat::AudioFormat         audio_tgt; //目标音频格式（当前好像总是一致）
 	int currentOpenStreamNumber; //当前打开视频流数目，很重要，因为与ffplay中不同，UE中open stream和read是在两个线程中，需要保证所有流都开启之后，再读取
 	int streamTotalNumber; //流总数 
-	TOptional<FTimespan> SeekTimeOptional;
-
 	double LastFetchVideoTime = 0; //最后视频包时间
+	TUniquePtr<FMediaSamples> MediaSamples;
 //ffmpeg变量
 private:
 	AVFormatContext* ic; //上下文
@@ -491,5 +463,4 @@ private:
 	FFTSample* rdft_data;
 
 	const AVCodecHWConfig* avCodecHWConfig;
-	//FRunnable* test1;
 };
