@@ -226,9 +226,9 @@ bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options)
 
 bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options, const FMediaPlayerOptions* PlayerOptions)
 {
-    FName name = "nnnn";
+  /*  FName name = "nnnn";
     FString dv = "";
-    FString name22 = Options->GetMediaOption(name, dv);
+    FString name22 = Options->GetMediaOption(name, dv);*/
     //打开新媒体之前，先关闭旧媒体
     Close();
     //如果媒体地址为空，直接返回
@@ -345,7 +345,8 @@ bool FFmpegMediaPlayer::FlushOnSeekStarted() const
 
 bool FFmpegMediaPlayer::FlushOnSeekCompleted() const
 {
-    return true; //Seek完成时清除样本
+    return false; //Seek完成时清除样本
+    //return this->Tracks->IsOnlyHasVideo();
 }
 
 bool FFmpegMediaPlayer::GetPlayerFeatureFlag(EFeatureFlag flag) const
@@ -353,8 +354,10 @@ bool FFmpegMediaPlayer::GetPlayerFeatureFlag(EFeatureFlag flag) const
     switch (flag)
     {
         case EFeatureFlag::UsePlaybackTimingV2: //音视频同步机制
-        case EFeatureFlag::PlayerUsesInternalFlushOnSeek: //配合EMediaEvent::SeekCompleted
+        case EFeatureFlag::PlayerUsesInternalFlushOnSeek: //阻止EMediaEvent::SeekCompleted时的Flush
             return true;
+        case EFeatureFlag::AlwaysPullNewestVideoFrame: //处理只有视频流时，播放卡主问题, 当只有视频流时，默认获取最新的帧进行播放
+            return this->Tracks->IsOnlyHasVideo();
     }
     return IMediaPlayer::GetPlayerFeatureFlag(flag);
 }

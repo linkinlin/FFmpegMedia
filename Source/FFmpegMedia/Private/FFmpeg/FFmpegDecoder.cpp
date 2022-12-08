@@ -133,29 +133,6 @@ void FFmpegDecoder::SetStartPtsTb(AVRational start_pts_tb_)
      this->start_pts_tb = start_pts_tb_;
 }
 
-//int FFmpegDecoder::Start(std::function<int(void*)> thread_func, void* arg)
-//{
-//    queue->Start();
-//    std::thread cpp_thread(thread_func, arg);
-//    decoder_tid = new std::thread(std::move(cpp_thread));
-//    if (!decoder_tid) {
-//        //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
-//        return AVERROR(ENOMEM);
-//    };
-//    return 0;
-//}
-//
-//int FFmpegDecoder::Start(FRunnable* frunnable, void* arg)
-//{
-//    queue->Start();
-//    decoder_thread = FRunnableThread::Create(frunnable, TEXT("DecoderThread"));
-//    if (!decoder_thread) {
-//        //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
-//        return AVERROR(ENOMEM);
-//    };
-//    return 0;
-//}
-
 int FFmpegDecoder::Start(FString threadName, std::function<void()> f)
 {
     queue->Start();
@@ -191,15 +168,6 @@ void FFmpegDecoder::Abort(FFmpegFrameQueue* fq)
         this->decoder_thread->WaitForCompletion();
         this->decoder_thread = NULL;
     }
-
- /*   try {
-        if (this->decoder_tid->joinable()) {
-            decoder_tid->join();
-        }
-    }
-    catch (std::system_error&) {
-    }
-    delete decoder_tid;*/
     this->queue->Flush();
 }
 

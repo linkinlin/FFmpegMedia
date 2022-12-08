@@ -170,6 +170,7 @@ public:
 	/** 查找最优硬件解码设备 */
 	const AVCodecHWConfig* FindBestDeviceType(const AVCodec* decoder);
 	IMediaSamples& GetSamples();
+	bool IsOnlyHasVideo();
 public:
 	//~ IMediaTracks interface
 	/**
