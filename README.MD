@@ -1,5 +1,7 @@
 FFMPEG Media Plugin for unreal engine 
 ===================================
+本插件基于[bakjos/FFMPEGMedia](https://github.com/bakjos/FFMPEGMedia)重写
+
 ## UE版本支持
 |  UE   | 是否支持  |
 |  ----  | ----  |
@@ -17,15 +19,21 @@ FFMPEG Media Plugin for unreal engine
 ## 文件类型支持
 |  类型   | 是否支持  |
 |  ----  | ----  |
-| mp4 | 支持 |
-| mp3  | 支持 |
-| mkv | 支持|
+| .mp4 | 支持 |
+| .mp3  | 支持 |
+| .mkv | 支持|
+| .aac | 支持|
+| .avi | 支持|
+| .m3u8 | 支持|
+| .flv | 支持|
 
 ## 协议类型支持
 |  类型   | 是否支持  |
 |  ----  | ----  |
 | rtmp | 支持 |
 | rtsp  | 支持 |
+| http  | 支持 |
+| https  | 支持 |
 
 ## 硬件解码支持
 |  平台   | 类型  | 是否支持  |
