@@ -158,6 +158,7 @@ public:
 		SupportedUriSchemes.Append(FFmpegMediaModule->GetSupportedUriSchemes());
 		// supported platforms
 		SupportedPlatforms.Add(TEXT("Windows"));
+		SupportedPlatforms.Add(TEXT("HoloLens"));
 		//todo: 支持linux
 		//SupportedPlatforms.Add(TEXT("Mac"));
 		//SupportedPlatforms.Add(TEXT("Android"));

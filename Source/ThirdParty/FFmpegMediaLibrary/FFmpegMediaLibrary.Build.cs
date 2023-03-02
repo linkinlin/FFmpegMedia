@@ -9,14 +9,16 @@ public class FFmpegMediaLibrary : ModuleRules
 	{
 		Type = ModuleType.External;
 		bool isLibrarySupported = false;
+		string prefixDir = "";
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			isLibrarySupported = true;
+			prefixDir = "x64";
 			// Add the import library
 			string[] libs = { "avcodec.lib", "avdevice.lib", "avfilter.lib", "avformat.lib", "avutil.lib", "postproc.lib", "swresample.lib", "swscale.lib" };
 			foreach (string lib in libs)
 			{
-				PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, "x64", "lib", lib));
+				PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, prefixDir, "lib", lib));
 			}
 
 			// Delay-load the DLL, so we can load it from the right place first
@@ -30,10 +32,27 @@ public class FFmpegMediaLibrary : ModuleRules
 				RuntimeDependencies.Add("$(PluginDir)/Binaries/ThirdParty/FFmpegMediaLibrary/Win64/" + dll);
 
 				//System.Console.WriteLine("Will cp FFmpeg dll form " + sourceDLL + " to " + targetDLL);
-				//RuntimeDependencies.Add(targetDLL, sourceDLL); //±àÒëÊ±
-				//RuntimeDependencies.Add(Path.Combine("$(TargetOutputDir)", dll), sourceDLL); //´ò°üÊ±
+				//RuntimeDependencies.Add(targetDLL, sourceDLL); //ç¼–è¯‘æ—¶
+				//RuntimeDependencies.Add(Path.Combine("$(TargetOutputDir)", dll), sourceDLL); //æ‰“åŒ…æ—¶
 			}
 
+		}
+		else if (Target.Platform == UnrealTargetPlatform.HoloLens)
+		{
+			isLibrarySupported = true;
+			prefixDir = "arm64";
+			string[] libs = { "avcodec.lib", "avdevice.lib", "avfilter.lib", "avformat.lib", "avutil.lib", "postproc.lib", "swresample.lib", "swscale.lib" };
+			foreach (string lib in libs)
+			{
+				PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, prefixDir, "lib", lib));
+			}
+			string[] dlls = { "avcodec-59.dll", "avdevice-59.dll", "avfilter-8.dll", "avformat-59.dll", "avutil-57.dll", "swresample-4.dll", "swscale-6.dll", "postproc-56.dll" };
+			foreach (string dll in dlls)
+			{
+				PublicDelayLoadDLLs.Add(dll);
+				RuntimeDependencies.Add("$(PluginDir)/Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/" + dll);
+			}
+			PublicDefinitions.Add("SCL_SECURE_NO_WARNINGS");
 		}
         else if (Target.Platform == UnrealTargetPlatform.Mac)
         {
@@ -61,13 +80,13 @@ public class FFmpegMediaLibrary : ModuleRules
 				RuntimeDependencies.Add(LinuxSoPath);
 			}
 		}
-		if (isLibrarySupported)
+		if (isLibrarySupported && prefixDir.Length > 0)
 		{
 			// Include path
 			PublicIncludePaths.AddRange(
 			new string[] {
 				// ... add public include paths required here ...
-				Path.Combine(ModuleDirectory, "x64", "include")
+				Path.Combine(ModuleDirectory, prefixDir, "include")
 				}
 			);
 		}
