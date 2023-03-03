@@ -85,6 +85,7 @@ public:
 	/** IModuleInterface implementation */
 	virtual void StartupModule() override {
 	    FString BaseDir = IPluginManager::Get().FindPlugin("FFmpegMedia")->GetBaseDir();
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 #if PLATFORM_WINDOWS
 		//开始d动态加载ffmpeg dll文件
 		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avcodec-59.dll"));
@@ -95,15 +96,24 @@ public:
 		FString postprocLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/postproc-56.dll"));
 		FString swresampleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/swresample-4.dll"));
 		FString swscaleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/swscale-6.dll"));
-
-		 AVUtilLibrary = !avutilLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avutilLibraryPath) : nullptr;
-		 SWResampleLibrary = !swresampleLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*swresampleLibraryPath) : nullptr;
-		 PostProcLibrary = !postprocLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*postprocLibraryPath) : nullptr;
-		 SWScaleLibrary = !swscaleLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*swscaleLibraryPath) : nullptr;
-		 AVCodecLibrary = !avcodeLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avcodeLibraryPath) : nullptr;
-		 AVFormatLibrary = !avformatLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avformatLibraryPath) : nullptr;
-		 AVFilterLibrary = !avfilterLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avfilterLibraryPath) : nullptr;
-		 AVDeviceLibrary = !avdeviceLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avdeviceLibraryPath) : nullptr;
+#else
+		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avcodec-59.dll"));
+		FString avdeviceLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avdevice-59.dll"));
+		FString avfilterLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avfilter-8.dll"));
+		FString avformatLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avformat-59.dll"));
+		FString avutilLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avutil-57.dll"));
+		FString postprocLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/postproc-56.dll"));
+		FString swresampleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/swresample-4.dll"));
+		FString swscaleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/swscale-6.dll"));
+#endif
+		AVUtilLibrary = !avutilLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avutilLibraryPath) : nullptr;
+		SWResampleLibrary = !swresampleLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*swresampleLibraryPath) : nullptr;
+		PostProcLibrary = !postprocLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*postprocLibraryPath) : nullptr;
+		SWScaleLibrary = !swscaleLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*swscaleLibraryPath) : nullptr;
+		AVCodecLibrary = !avcodeLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avcodeLibraryPath) : nullptr;
+		AVFormatLibrary = !avformatLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avformatLibraryPath) : nullptr;
+		AVFilterLibrary = !avfilterLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avfilterLibraryPath) : nullptr;
+		AVDeviceLibrary = !avdeviceLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avdeviceLibraryPath) : nullptr;
 #endif
 		//av_register_all(); //ffmpeg注册组件，ffmpeg5中已经不存在
 		avformat_network_init(); //初始化ffmpeg网络库
