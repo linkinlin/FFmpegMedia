@@ -1010,7 +1010,7 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
                we correct audio sync only if larger than this threshold */
             this->audio_diff_threshold = (double)(this->audio_tgt.HardwareSize) / this->audio_tgt.BytesPerSec;
 
-            if (!displayRunning) {
+            if (!audioRunning) {
                 audioRunning = true;
                 audioRenderThread = LambdaFunctionRunnable::RunThreaded("AudioRenderThread", [this]() {
                     AudioRenderThread();

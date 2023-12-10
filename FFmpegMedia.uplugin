@@ -20,13 +20,13 @@
 			"Name": "FFmpegMedia",
 			"Type": "Runtime",
 			"LoadingPhase": "PostConfigInit",
-			"WhitelistPlatforms": [ "Win64", "Linux", "Mac", "HoloLens" ]
+			"WhitelistPlatforms": [ "Win64", "Linux", "Mac" ]
 		},
 		{
 			"Name": "FFmpegMediaFactory",
 			"Type": "RuntimeNoCommandlet",
 			"LoadingPhase": "PostEngineInit",
-			"WhitelistPlatforms": [ "Win64", "Linux", "Mac", "HoloLens" ]
+			"WhitelistPlatforms": [ "Win64", "Linux", "Mac" ]
 		}
 	]
 }

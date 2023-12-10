@@ -25,7 +25,7 @@ public class FFmpegMediaLibrary : ModuleRules
 			//PublicDelayLoadDLLs.Add("ExampleLibrary.dll");
 
 			// Ensure that the DLL is staged along with the executable
-			string[] dlls = { "avcodec-59.dll", "avdevice-59.dll", "avfilter-8.dll", "avformat-59.dll", "avutil-57.dll", "swresample-4.dll", "swscale-6.dll", "postproc-56.dll" };
+			string[] dlls = { "avcodec-60.dll", "avdevice-60.dll", "avfilter-9.dll", "avformat-60.dll", "avutil-58.dll", "swresample-4.dll", "swscale-7.dll", "postproc-57.dll" };
 			foreach (string dll in dlls)
 			{
 				PublicDelayLoadDLLs.Add(dll);
@@ -36,23 +36,6 @@ public class FFmpegMediaLibrary : ModuleRules
 				//RuntimeDependencies.Add(Path.Combine("$(TargetOutputDir)", dll), sourceDLL); //打包时
 			}
 
-		}
-		else if (Target.Platform == UnrealTargetPlatform.HoloLens)
-		{
-			isLibrarySupported = true;
-			prefixDir = "arm64";
-			string[] libs = { "avcodec.lib", "avdevice.lib", "avfilter.lib", "avformat.lib", "avutil.lib", "postproc.lib", "swresample.lib", "swscale.lib" };
-			foreach (string lib in libs)
-			{
-				PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, prefixDir, "lib", lib));
-			}
-			string[] dlls = { "avcodec-59.dll", "avdevice-59.dll", "avfilter-8.dll", "avformat-59.dll", "avutil-57.dll", "swresample-4.dll", "swscale-6.dll", "postproc-56.dll" };
-			foreach (string dll in dlls)
-			{
-				PublicDelayLoadDLLs.Add(dll);
-				RuntimeDependencies.Add("$(PluginDir)/Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/" + dll);
-			}
-			PublicDefinitions.Add("SCL_SECURE_NO_WARNINGS");
 		}
         else if (Target.Platform == UnrealTargetPlatform.Mac)
         {
