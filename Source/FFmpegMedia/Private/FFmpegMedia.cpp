@@ -88,14 +88,14 @@ public:
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 #if PLATFORM_WINDOWS
 		//开始d动态加载ffmpeg dll文件
-		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avcodec-59.dll"));
-		FString avdeviceLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avdevice-59.dll"));
-		FString avfilterLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avfilter-8.dll"));
-		FString avformatLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avformat-59.dll"));
-		FString avutilLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avutil-57.dll"));
-		FString postprocLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/postproc-56.dll"));
+		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avcodec-60.dll"));
+		FString avdeviceLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avdevice-60.dll"));
+		FString avfilterLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avfilter-9.dll"));
+		FString avformatLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avformat-60.dll"));
+		FString avutilLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avutil-58.dll"));
+		FString postprocLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/postproc-57.dll"));
 		FString swresampleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/swresample-4.dll"));
-		FString swscaleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/swscale-6.dll"));
+		FString swscaleLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/swscale-7.dll"));
 #else
 		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avcodec-59.dll"));
 		FString avdeviceLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/HoloLens/avdevice-59.dll"));

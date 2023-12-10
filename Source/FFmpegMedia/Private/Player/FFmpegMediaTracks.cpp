@@ -1480,7 +1480,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
                     UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Failed to get HW surface format"));
                     return AV_PIX_FMT_NONE;
                 };
-                avctx->thread_safe_callbacks = 1;
+                //todo: 已经废弃了  avctx->thread_safe_callbacks = 1;
                 UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Hw enable success"), this);
             }
             else {
