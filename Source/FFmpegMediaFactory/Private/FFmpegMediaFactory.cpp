@@ -2,7 +2,6 @@
 
 #include "FFmpegMediaFactory.h"
 #include "Modules/ModuleManager.h"
-//#include "Core.h"
 #include "Interfaces/IPluginManager.h"
 #include "IMediaModule.h"
 #include "IMediaOptions.h"
@@ -19,6 +18,10 @@ DEFINE_LOG_CATEGORY(LogFFmpegMediaFactory);
 
 #define LOCTEXT_NAMESPACE "FFFmpegMediaFactoryModule"
 
+
+/**
+ * @brief Implements the FFmpegMediaFactory module.
+*/
 class FFFmpegMediaFactoryModule 
 	: public IMediaPlayerFactory
 	, public IModuleInterface
@@ -27,13 +30,12 @@ public:
 
 	/** Default constructor. */
 	FFFmpegMediaFactoryModule() { }
+
 public:
 	//~ IMediaPlayerFactory interface 
-	// IMediaPlayerFactory 接口实现
 
 	/**
 	 * 判断视频地址是否可以播放
-	 * 注意该方法是需要手动调用的，比如在蓝图中播放视频时，调用该方法检测给定的视频地址是否可以播放
 	 */
 	virtual bool CanPlayUrl(const FString& Url, const IMediaOptions* Options, TArray<FText>* OutWarnings, TArray<FText>* OutErrors) const override {
 		UE_LOG(LogFFmpegMediaFactory, Log, TEXT("FFmpegMediaFactory: CanPlayUrl %s"), *Url);
@@ -118,22 +120,22 @@ public:
 	 * 获取播放器GUID
 	 */
 	virtual FGuid GetPlayerPluginGUID() const override {
-		//todo: 重新生成一个
 		static FGuid PlayerPluginGUID(0x688ae1e8, 0x9b647f80, 0x9ce98ced, 0x9daa4ca6);
 		return PlayerPluginGUID;
 	}
 
 	/**
-	 * 获取播放器支持的平台
+	 * 获取播放器支持的平台列表
 	 */
 	virtual const TArray<FString>& GetSupportedPlatforms() const override {
 		return SupportedPlatforms;
 	}
 
 	/**
-	 * 获取播放器支持的特性
+	 * 判断播放器是否支持指定的特性
 	 */
-	virtual bool SupportsFeature(EMediaFeature Feature) const override {
+	virtual bool SupportsFeature(EMediaFeature Feature) const override 
+	{
 
 		return ((Feature == EMediaFeature::AudioSamples) ||
 			(Feature == EMediaFeature::AudioTracks) ||
@@ -145,21 +147,22 @@ public:
 			(Feature == EMediaFeature::VideoTracks));
 	}
 
+public:
 
 	/** IModuleInterface implementation */
-	virtual void StartupModule() override {
 
+	virtual void StartupModule() override {
 		//根据模块名加载模块
 		auto FFmpegMediaModule = FModuleManager::LoadModulePtr<IFFmpegMediaModule>("FFmpegMedia");
-
 		// supported file extensions
-		SupportedFileExtensions.Append(FFmpegMediaModule->GetSupportedFileExtensions());
+		SupportedFileExtensions.Append(FFmpegMediaModule->GetSupportedFileExtensions());//调用ffmpegapi获取
 		// supported schemes
-		SupportedUriSchemes.Append(FFmpegMediaModule->GetSupportedUriSchemes());
+		SupportedUriSchemes.Append(FFmpegMediaModule->GetSupportedUriSchemes()); //调用ffmpegapi获取
 		// supported platforms
 		SupportedPlatforms.Add(TEXT("Windows"));
-		SupportedPlatforms.Add(TEXT("HoloLens"));
 		//todo: 支持linux
+		//SupportedPlatforms.Add(TEXT("Linux"));
+		//SupportedPlatforms.Add(TEXT("HoloLens"));
 		//SupportedPlatforms.Add(TEXT("Mac"));
 		//SupportedPlatforms.Add(TEXT("Android"));
 
@@ -189,6 +192,7 @@ public:
 #endif //WITH_EDITOR
 
 	}
+
 	virtual void ShutdownModule() override {
 		// unregister player factory
 		auto MediaModule = FModuleManager::GetModulePtr<IMediaModule>("Media");
@@ -210,7 +214,7 @@ public:
 	}
 
 private:
-	/** 支持的文件后缀类 */
+	/** 支持的文件后缀 */
 	TArray<FString> SupportedFileExtensions;
 
 	/** 支持的平台类型 */

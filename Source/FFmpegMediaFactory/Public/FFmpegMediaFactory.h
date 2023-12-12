@@ -3,5 +3,6 @@
 #pragma once
 
 #include "Logging/LogMacros.h"
+
 /** Log category for the FFmpegMediaFactory module. */
 DECLARE_LOG_CATEGORY_EXTERN(LogFFmpegMediaFactory, Log, All);

@@ -1,13 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "FFmpegMedia.h"
-//#include "Core.h"
 #include "Modules/ModuleManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Templates/SharedPointer.h"
 
+#include "FFmpegMedia.h"
 #include "FFmpegMediaPlayer.h"
-
 extern  "C" {
 	#include "libavformat/avformat.h"
 }
@@ -17,15 +15,24 @@ DEFINE_LOG_CATEGORY(LogFFmpegMedia);
 #define LOCTEXT_NAMESPACE "FFFmpegMediaModule"
 
 /**
- * FFmpegMedia模块
+ * Implements the FFmpegMedia module.
  */
 class FFFmpegMediaModule : public IFFmpegMediaModule
 {
+
+public:
+
+	/** Default constructor. */
+	FFFmpegMediaModule()
+		: Initialized(false)
+	{ }
+
 public:
 	/**
 	 * 创建播放器
 	 */
-	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer(IMediaEventSink& EventSink) {
+	virtual TSharedPtr<IMediaPlayer, ESPMode::ThreadSafe> CreatePlayer(IMediaEventSink& EventSink) 
+	{
 		if (!Initialized)
 		{
 			UE_LOG(LogFFmpegMedia, Error, TEXT("FFmpegMediaModule not load, create FFmpegMediaPlayer failed"));
@@ -33,14 +40,20 @@ public:
 		}
 
 		UE_LOG(LogFFmpegMedia, Log, TEXT("create FFmpegMediaPlayer success"));
-		UE_LOG(LogFFmpegMedia, Log, TEXT("create FFmpegMediaPlayer success"));
 		return MakeShareable(new FFmpegMediaPlayer(EventSink));
 	}
 
 	/**
 	 * 获取平台支持的文件扩展名
 	 */
-	virtual TArray<FString> GetSupportedFileExtensions() {
+	virtual TArray<FString> GetSupportedFileExtensions() 
+	{
+		TArray<FString> extensions;
+		if (!Initialized)
+		{
+			return extensions;
+		}
+
 		TMap<FString, FString> extensionMap;
 		void* oformat_opaque = NULL;
 		const AVOutputFormat* oformat = av_muxer_iterate(&oformat_opaque);
@@ -62,7 +75,6 @@ public:
 			oformat = av_muxer_iterate(&oformat_opaque);
 		}
 
-		TArray<FString> extensions;
 		extensionMap.GetKeys(extensions);
 		return extensions;
 	}
@@ -70,11 +82,17 @@ public:
 	/**
 	 * 获取平台支持的URL
 	 */
-	virtual TArray<FString> GetSupportedUriSchemes() {
+	virtual TArray<FString> GetSupportedUriSchemes() 
+	{
+		TArray<FString> protocols;
+		if (!Initialized)
+		{
+			return protocols;
+		}
+		
 		void* opaque = NULL;
 		//0: 输入协议, 1: 输出协议， 这里获取输入协议
 		const char* name = avio_enum_protocols(&opaque, 0);
-		TArray<FString> protocols;
 		while (name) {
 			protocols.Add(name);
 			name = avio_enum_protocols(&opaque, 0);
@@ -82,12 +100,15 @@ public:
 		return protocols;
 	}
 
-	/** IModuleInterface implementation */
-	virtual void StartupModule() override {
+public:
+	//~ IWmfMediaModule interface
+
+	virtual void StartupModule() override 
+	{
 	    FString BaseDir = IPluginManager::Get().FindPlugin("FFmpegMedia")->GetBaseDir();
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 #if PLATFORM_WINDOWS
-		//开始d动态加载ffmpeg dll文件
+		//开始动态加载ffmpeg dll文件
 		FString avcodeLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avcodec-60.dll"));
 		FString avdeviceLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avdevice-60.dll"));
 		FString avfilterLibraryPath = FPaths::Combine(*BaseDir, TEXT("Binaries/ThirdParty/FFmpegMediaLibrary/Win64/avfilter-9.dll"));
@@ -114,18 +135,17 @@ public:
 		AVFormatLibrary = !avformatLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avformatLibraryPath) : nullptr;
 		AVFilterLibrary = !avfilterLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avfilterLibraryPath) : nullptr;
 		AVDeviceLibrary = !avdeviceLibraryPath.IsEmpty() ? FPlatformProcess::GetDllHandle(*avdeviceLibraryPath) : nullptr;
-#endif
-		//av_register_all(); //ffmpeg注册组件，ffmpeg5中已经不存在
-		avformat_network_init(); //初始化ffmpeg网络库
-		
+#endif	
 		UE_LOG(LogFFmpegMedia, Display, TEXT("FFmpeg AVCodec version: %d.%d.%d"), LIBAVFORMAT_VERSION_MAJOR, LIBAVFORMAT_VERSION_MINOR, LIBAVFORMAT_VERSION_MICRO);
 		UE_LOG(LogFFmpegMedia, Display, TEXT("FFmpeg license: %s"), UTF8_TO_TCHAR(avformat_license()));
-		av_log_set_level(AV_LOG_INFO);
-		av_log_set_flags(AV_LOG_SKIP_REPEATED);
-		av_log_set_callback(&log_callback);
+		av_log_set_level(AV_LOG_INFO); //设置ffmpeg日志级别
+		av_log_set_flags(AV_LOG_SKIP_REPEATED); //设置日志标识
+		av_log_set_callback(&log_callback); //设置日志回调方法
 		Initialized = true;
 	}
-	virtual void ShutdownModule() override {
+
+	virtual void ShutdownModule() override 
+	{
 		if (!Initialized)
 		{
 			return;
@@ -141,12 +161,22 @@ public:
 		if (AVUtilLibrary) FPlatformProcess::FreeDllHandle(AVUtilLibrary);
 		Initialized = false;
 	}
+
 public:
 
 	/** Virtual destructor. */
 	virtual ~FFFmpegMediaModule() { }
 
-	static void  log_callback(void*, int level, const char* format, va_list arglist) {
+public:
+	/**
+	 * @brief ffmpeg日志回调
+	 * @param  
+	 * @param level 
+	 * @param format 
+	 * @param arglist 
+	*/
+	static void  log_callback(void*, int level, const char* format, va_list arglist) 
+	{
 
 		char buffer[2048];
 #if PLATFORM_WINDOWS
@@ -185,7 +215,7 @@ public:
 	}
 
 private:
-	/** 是否初始化 */
+	/** Whether the module has been initialized. */
 	bool Initialized;
 
 	void* AVUtilLibrary;

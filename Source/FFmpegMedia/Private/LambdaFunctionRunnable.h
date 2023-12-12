@@ -6,32 +6,44 @@
 #include <HAL/RunnableThread.h>
 #include <functional>
 #include <HAL/Runnable.h>
+
 /**
- * 基于UE4异步API实现
+ * 自定义线程类
  * 用于替换SDL_CreateThread
  */
 class LambdaFunctionRunnable : public FRunnable
 {
 public:
+
 	/**
-	* 运行一个异步线程
-	* threadName 线程名称
-	* f 要执行的函数
+	 * @brief 运行一个线程
+	 * @param threadName 线程名称
+	 * @param threadFunc 线程执行方法 
+	 * @return 
 	*/
-	static FRunnableThread* RunThreaded(FString threadName, std::function<void()> f);
-	/** 
-	* 退出
+	static FRunnableThread* RunThreaded(FString threadName, std::function<void()> threadFunc);
+	
+	/**
+	 * @brief 退出线程
 	*/
 	void Exit() override;
-	/** 
-	* 运行
+	
+	/**
+	 * @brief 执行线程
+	 * @return 
 	*/
 	uint32	Run()	override;
+
 protected:
 	/**
-	* 构造函数
+	 * @brief 构造函数
+	 * @param threadFunc 线程执行方法
 	*/
-	LambdaFunctionRunnable(std::function<void()> f);
-	std::function<void()> _f;
+	LambdaFunctionRunnable(std::function<void()> threadFunc);
+
+	//线程执行方法
+	std::function<void()> _threadFunc;
+
+	//线程
 	FRunnableThread* thread;
 };
