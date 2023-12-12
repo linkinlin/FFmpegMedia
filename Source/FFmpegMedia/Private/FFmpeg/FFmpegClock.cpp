@@ -108,3 +108,61 @@ double FFmpegClock::GetPts()
 {
     return this->pts;
 }
+
+
+
+double FFmpegClock::get_clock()
+{
+    if (*this->queue_serial != this->serial)
+        return NAN;
+    if (this->paused) {
+        return this->pts;
+    }
+    else {
+        double time = av_gettime_relative() / 1000000.0;
+        return this->pts_drift + time - (time - this->last_updated) * (1.0 - this->speed);
+    }
+}
+
+void FFmpegClock::set_clock_at(double pts_, int serial_, double time_)
+{
+    this->pts = pts_;
+    this->last_updated = time_;
+    this->pts_drift = this->pts - time_;
+    this->serial = serial_;
+}
+//(double pts_, int serial_, double time_)
+//{
+//    this->pts = pts_;
+//    this->last_updated = time_;
+//    this->pts_drift = this->pts - time_;
+//    this->serial = serial_;
+//}
+//void FFmpegClock::set_clock(double pts, int serial)
+//{
+//    double time = av_gettime_relative() / 1000000.0;
+//    set_clock_at(pts, serial, time);
+//}
+//
+//void FFmpegClock::set_clock_speed(double speed)
+//{
+//    set_clock(get_clock(), this->serial);
+//    this->speed = speed;
+//}
+//
+//void FFmpegClock::init_clock(int* queue_serial)
+//{
+//    this->speed = 1.0;
+//    this->paused = 0;
+//    this->queue_serial = queue_serial;
+//    set_clock(NAN, -1);
+//}
+//
+//void FFmpegClock::sync_clock_to_slave(FFmpegClock* slave)
+//{
+//    double clock = get_clock();
+//    double slave_clock = slave->get_clock();
+//    if (!isnan(slave_clock) && (isnan(clock) || fabs(clock - slave_clock) > AV_NOSYNC_THRESHOLD))
+//        set_clock(slave_clock, slave->serial);
+//}
+

@@ -11,9 +11,11 @@
  */
 class FFmpegClock
 {
+
 public:
 	FFmpegClock();
 	~FFmpegClock();
+
 public:
     double Get();
     void SetAt(double pts, int serial, double time);
@@ -28,6 +30,15 @@ public:
     void SetPaused(int paused_);
     double GetSpeed();
     double GetPts();
+
+public:
+    double get_clock();
+    void set_clock_at(double pts, int serial, double time);
+    //void set_clock(double pts, int serial);
+   // void set_clock_speed(double speed);
+    //void init_clock(int* queue_serial);
+    //void sync_clock_to_slave(FFmpegClock* slave);
+
 public:
     double pts;           /* clock base 时间基准*/
     double pts_drift;     /* clock base minus time at which we updated the clock 时间基减去更新时钟的时间*/
