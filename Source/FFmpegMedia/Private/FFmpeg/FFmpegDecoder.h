@@ -48,6 +48,8 @@ public:
 
 
 public:
+
+    int decoder_start(FString threadName, std::function<void()> f);
     /**
      * @brief 解码器初始化
      * @param avctx 

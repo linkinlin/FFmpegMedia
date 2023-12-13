@@ -23,37 +23,37 @@ FFmpegCond::~FFmpegCond()
 	FPlatformProcess::ReturnSynchEventToPool(event);
 }
 
-void FFmpegCond::signal()
-{
-	if (event) {
-		event->Trigger();
-	}
-}
-
-int FFmpegCond::wait(FCriticalSection& mutex)
-{
-	return waitTimeout(mutex, 0);
-}
-
-int FFmpegCond::waitTimeout(FCriticalSection& mutex, unsigned int ms)
-{
-	mutex.Unlock();
-	if (ms == 0) {
-		event->Wait();
-		mutex.Lock();
-		return 0;
-	}
-	else
-	{
-		bool wait_result = event->Wait(FTimespan::FromMicroseconds(ms));
-		mutex.Lock();
-		if (!wait_result) {
-			return 1;
-		}
-		return 0;
-	}
-	return 0;
-}
+//void FFmpegCond::signal()
+//{
+//	if (event) {
+//		event->Trigger();
+//	}
+//}
+//
+//int FFmpegCond::wait(FCriticalSection& mutex)
+//{
+//	return waitTimeout(mutex, 0);
+//}
+//
+//int FFmpegCond::waitTimeout(FCriticalSection& mutex, unsigned int ms)
+//{
+//	mutex.Unlock();
+//	if (ms == 0) {
+//		event->Wait();
+//		mutex.Lock();
+//		return 0;
+//	}
+//	else
+//	{
+//		bool wait_result = event->Wait(FTimespan::FromMicroseconds(ms));
+//		mutex.Lock();
+//		if (!wait_result) {
+//			return 1;
+//		}
+//		return 0;
+//	}
+//	return 0;
+//}
 
 void FFmpegCond::Signal()
 {

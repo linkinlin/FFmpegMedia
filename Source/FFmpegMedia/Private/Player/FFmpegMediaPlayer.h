@@ -23,46 +23,53 @@ class FFmpegMediaPlayer
 	, protected IMediaCache
 	, protected IMediaView
 {
+
 public:
+
 	FFmpegMediaPlayer(IMediaEventSink& InEventSink);
 	~FFmpegMediaPlayer();
+
 public:
-	//IMediaPlayer接口
+	//~ IMediaPlayer interface
+
 	virtual void Close() override;
-	/**获取播放器缓存控件 */
+
 	virtual IMediaCache& GetCache() override;
-	/** 获取播放器的播放控件 */
+
 	virtual IMediaControls& GetControls() override;
+
 	/**
 	* Get debug information about the player and currently opened media.
 	* 获取播放器以及当前打开的媒体的媒体的调试信息, 触发事件EMediaEvent::MediaOpened和EMediaEvent::MediaOpenFailed调用 
 	*/
 	virtual FString GetInfo() const override;
-	/**获取播放器插件的GUID */
+
 	virtual FGuid GetPlayerPluginGUID() const override;
-	/** 获取播放器的样本队列 */
+
 	virtual IMediaSamples& GetSamples() override;
-	/** 
-	* Get playback statistics information.
-	* 获取播放统计信息
-	*/
-	virtual FString GetStats() const override;
-	/** 获取播放器轨道集合 */
+
+	virtual FString GetStats() const override; 
+
 	virtual IMediaTracks& GetTracks() override;
-	/**获取当前加载的媒体的URL地址 */
+	
 	virtual FString GetUrl() const override;
-	/**获取播放器视图配置 */
+	
 	virtual IMediaView& GetView() override;
-	/**根据Url和可选参数打开媒体源 */
+
 	virtual bool Open(const FString& Url, const IMediaOptions* Options) override;
+
 	virtual bool Open(const FString& Url, const IMediaOptions* Options, const FMediaPlayerOptions* PlayerOptions) override;
-	/**根据Url和可选参数以及播放器参数打开媒体源 */
+
 	virtual bool Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions* Options) override;
+	
 	virtual void TickInput(FTimespan DeltaTime, FTimespan Timecode) override;
+
 	virtual bool FlushOnSeekStarted() const override;
+
 	virtual bool FlushOnSeekCompleted() const override;
-	/** 根据功能标识判断播放器功能是否支持 */
+
 	virtual bool GetPlayerFeatureFlag(EFeatureFlag flag) const override;
+
 protected:
 	/**
 	 * Initialize the native FFmpegMediaPlayer instance.
@@ -78,6 +85,7 @@ private:
 	/** [Custom] 读取媒体内容
 	 * this thread gets the stream from the disk or the network
 	 * 从文件或网络上获取流信息
+	 * 只负责初始化ic，其他代码都放入FFmpegTracks
 	 * 参考ffplay static int read_thread(void *arg) 注意该方法并没有实现全部业务，只包含打开文件的那部分操作，其他操作则交给了FFmpegTracks类实现
 	 */
 	AVFormatContext* ReadContext(const TSharedPtr<FArchive, ESPMode::ThreadSafe>& Archive, const FString& Url, bool Precache);

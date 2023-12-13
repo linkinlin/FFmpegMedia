@@ -149,12 +149,11 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
 
     if (PlayerOptions != nullptr)
     {
-        this->MediaTrackOptions = PlayerOptions->Tracks;
+        this->MediaTrackOptions = PlayerOptions->Tracks; //设置媒体轨道选项
     }
 
     FScopeLock Lock(&CriticalSection); //注意加锁
- 
-    //初始化设置媒体是否改变和轨道是否改变为true
+
     this->MediaSourceChanged = true;
     this->SelectionChanged = true;
 
@@ -167,63 +166,11 @@ void FFFmpegMediaTracks::Initialize(AVFormatContext* ic_, const FString& Url, co
     }
     this->ic = ic_;
 
-    //参考stream_open，先初始化
-    this->last_video_stream = this->video_stream = -1;
-    this->last_audio_stream = this->audio_stream = -1;
-    this->last_subtitle_stream = this->subtitle_stream = -1;
-
-    int startup_volume = 100; //声音范围 set startup volume 0=min 100=max
-    unsigned  i;
-
-    /* start video display */
-    if (this->pictq.Init(&this->videoq, VIDEO_PICTURE_QUEUE_SIZE, 1) < 0) {  //初始化图片解码帧队列
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Initialize fail, Because pictq init fail"), this);
-        goto fail;
-    }
-    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing pictq frame queue success"), this);
-
-    if (this->subpq.Init(&this->subtitleq, SUBPICTURE_QUEUE_SIZE, 0) < 0) { // //初始化字幕解码帧队列
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Initialize fail, Because subpq init fail"), this);
-        goto fail;
-    }
-    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing subpq frame queue success"), this);
-
-    if (this->sampq.Init(&this->audioq, SAMPLE_QUEUE_SIZE, 1) < 0) {   //初始化音频解码帧队列
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Initialize fail, Because sampq init fail"), this);
-        goto fail;
-    }
-    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing audioq frame queue success"), this);
-
-    if (this->videoq.Init() < 0 ||
-    this->audioq.Init() < 0 ||
-    this->subtitleq.Init() < 0)
-        goto fail;
-
-    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing videoq audioq subtitleq packet queue success"), this);
-   
-    this->continue_read_thread = new FFmpegCond();
-    if (!this->continue_read_thread) {
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p:  create continue_read_thread fail"), this);
-        goto fail;
-    }
-
-    this->vidclk.Init(&this->videoq);
-    this->audclk.Init(&this->audioq);
-    this->extclk.Init(&this->extclk);
-    UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p: Initializing vidclk audclk extclk success"), this);
-
+    this->stream_open(); //todo:判断状态
     //读取流之前，将状态设置为准备状态
     CurrentState = EMediaState::Preparing;
 
-    this->audio_clock_serial = -1;
-    if (startup_volume < 0)
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d < 0, setting to 0"), this, startup_volume);
-    if (startup_volume > 100)
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d > 100, setting to 100"), this, startup_volume);
-    startup_volume = av_clip(startup_volume, 0, 100);
-    this->audio_volume = startup_volume;
-    this->av_sync_type = AV_SYNC_AUDIO_MASTER; //默认音频(此时同步只会使用音频时钟和外部时钟)
-
+    unsigned  i;
     for (i = 0; i < ic_->nb_streams; i++) {
         AVStream* st = ic->streams[i];
         enum AVMediaType type = st->codecpar->codec_type;
@@ -263,6 +210,86 @@ fail:
     return;
 }
 
+int FFFmpegMediaTracks::stream_open() {
+    int av_sync_type_ = AV_SYNC_AUDIO_MASTER; //todo: 设置成setting
+    int startup_volume = 100; //todo：设置成setting
+
+    this->last_video_stream = this->video_stream = -1;
+    this->last_audio_stream = this->audio_stream = -1;
+    this->last_subtitle_stream = this->subtitle_stream = -1;
+
+    /* start video display */
+    if (this->pictq.frame_queue_init(&this->videoq, VIDEO_PICTURE_QUEUE_SIZE, 1) < 0)
+        goto fail;
+    if (this->subpq.frame_queue_init(&this->subtitleq, SUBPICTURE_QUEUE_SIZE, 0) < 0)
+        goto fail;
+    if (this->sampq.frame_queue_init(&this->audioq, SAMPLE_QUEUE_SIZE, 1) < 0)
+        goto fail;
+
+    if (this->videoq.packet_queue_init() < 0 || this->audioq.packet_queue_init() < 0 ||
+        this->subtitleq.packet_queue_init() < 0)
+        goto fail;
+
+    this->continue_read_thread = new FFmpegCond();
+    if (!(this->continue_read_thread)) {
+        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p:  create continue_read_thread fail"), this);
+        goto fail;
+    }
+
+    this->vidclk.init_clock(&this->videoq.serial);
+    this->audclk.init_clock(&this->audioq.serial);
+    this->extclk.init_clock(&this->extclk.serial);
+    this->audio_clock_serial = -1;
+    if (startup_volume < 0)
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d < 0, setting to 0"), this, startup_volume);
+    if (startup_volume > 100)
+        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks: %p:  -volume=%d > 100, setting to 100"), this, startup_volume);
+    startup_volume = av_clip(startup_volume, 0, 100);
+    this->audio_volume = startup_volume;
+    this->muted = 0;
+    this->av_sync_type = av_sync_type_;
+    return 0;
+fail:
+    stream_close();
+    return -1;
+}
+
+void FFFmpegMediaTracks::stream_close()
+{
+    /* XXX: use a special url_shutdown call to abort parse cleanly */
+    this->abort_request = 1;
+    this->read_tid->WaitForCompletion();
+
+    /* close each stream */
+    //if (this->audio_stream >= 0)
+    //    stream_component_close(is, is->audio_stream);
+    //if (this->video_stream >= 0)
+    //    stream_component_close(is, is->video_stream);
+    //if (is->subtitle_stream >= 0)
+    //    stream_component_close(is, is->subtitle_stream);
+
+    //avformat_close_input(&is->ic);
+
+    //packet_queue_destroy(&is->videoq);
+    //packet_queue_destroy(&is->audioq);
+    //packet_queue_destroy(&is->subtitleq);
+
+    ///* free all pictures */
+    //frame_queue_destroy(&is->pictq);
+    //frame_queue_destroy(&is->sampq);
+    //frame_queue_destroy(&is->subpq);
+    //SDL_DestroyCond(is->continue_read_thread);
+    //sws_freeContext(is->sub_convert_ctx);
+    //av_free(is->filename);
+    //if (is->vis_texture)
+    //    SDL_DestroyTexture(is->vis_texture);
+    //if (is->vid_texture)
+    //    SDL_DestroyTexture(is->vid_texture);
+    //if (is->sub_texture)
+    //    SDL_DestroyTexture(is->sub_texture);
+    //av_free(is);
+}
+
 /** 关闭播放 */
 void FFFmpegMediaTracks::Shutdown()
 {
@@ -295,15 +322,15 @@ void FFFmpegMediaTracks::Shutdown()
     }
 
     //销毁包队列
-    this->videoq.Destroy();
-    this->audioq.Destroy();
-    this->subtitleq.Destroy();
+    this->videoq.packet_queue_destroy();
+    this->audioq.packet_queue_destroy();
+    this->subtitleq.packet_queue_destroy();
 
     //销毁帧队列
     /* free all pictures */
-    this->pictq.Destory();
-    this->sampq.Destory();
-    this->subpq.Destory();
+    this->pictq.frame_queue_destroy();
+    this->sampq.frame_queue_destroy();
+    this->subpq.frame_queue_destroy();
     if (img_convert_ctx != nullptr) {
         sws_freeContext(this->img_convert_ctx);
         this->img_convert_ctx = NULL;
@@ -594,8 +621,8 @@ FTimespan FFFmpegMediaTracks::RenderAudio()
     }
     /* Let's assume the audio driver that is used by SDL has two periods. */
     if (!isnan(this->audio_clock)) {
-        this->audclk.SetAt(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_buf_size) / this->audio_tgt.BytesPerSec, this->audio_clock_serial, audio_callback_time / 1000000.0);
-        this->extclk.SyncToSlave(&this->audclk);
+        this->audclk.set_clock_at(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_buf_size) / this->audio_tgt.BytesPerSec, this->audio_clock_serial, audio_callback_time / 1000000.0);
+        this->extclk.sync_clock_to_slave(&this->audclk);
     }
     return time;
 }
@@ -640,7 +667,7 @@ bool FFFmpegMediaTracks::SetRate(float Rate)
         CurrentState = EMediaState::Paused;
         DeferredEvents.Enqueue(EMediaEvent::PlaybackSuspended);
         if (!this->paused) {//如果未暂停，则执行以下操作
-            this->extclk.Set(this->extclk.Get(), this->extclk.GetSerial());
+            this->extclk.set_clock(this->extclk.get_clock(), this->extclk.serial);
             UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: SetRate =0 this->paused %d"), this, 1);
             this->paused = 1;
         }
@@ -655,9 +682,9 @@ bool FFFmpegMediaTracks::SetRate(float Rate)
                 if (this->read_pause_return != AVERROR(ENOSYS)) {
                     this->vidclk.paused = 0;
                 }
-                this->vidclk.Set(this->vidclk.Get(), this->vidclk.serial);
+                this->vidclk.set_clock(this->vidclk.get_clock(), this->vidclk.serial);
             }
-            this->extclk.Set(this->extclk.Get(), this->extclk.GetSerial());
+            this->extclk.set_clock(this->extclk.get_clock(), this->extclk.serial);
             UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: SetRate =1 this->paused %d"), this, 0);
             this->paused = 0;
         }
@@ -1238,7 +1265,7 @@ int FFFmpegMediaTracks::read_thread()
         //todo: 有必要?
         if (this->currentOpenStreamNumber < this->streamTotalNumber) {
             wait_mutex->Lock();
-            continue_read_thread->waitTimeout(*wait_mutex, 10);
+            continue_read_thread->WaitTimeout(wait_mutex, 10);
             wait_mutex->Unlock();
             continue;
         }
@@ -1267,20 +1294,20 @@ int FFFmpegMediaTracks::read_thread()
             }
             else {
                 if (this->audio_stream >= 0) {
-                    this->audioq.Flush();
+                    this->audioq.packet_queue_flush();
                 }
                 if (this->subtitle_stream >= 0) {
-                    this->subtitleq.Flush();
+                    this->subtitleq.packet_queue_flush();
                 }
                 if (this->video_stream >= 0) {
-                    this->videoq.Flush();
+                    this->videoq.packet_queue_flush();
                     //avcodec_flush_buffers(this->video_avctx);
                 }
                 if (this->seek_flags & AVSEEK_FLAG_BYTE) {
-                    this->extclk.Set(NAN, 0);
+                    this->extclk.set_clock(NAN, 0);
                 }
                 else {
-                    this->extclk.Set(seek_target / (double)AV_TIME_BASE, 0);
+                    this->extclk.set_clock(seek_target / (double)AV_TIME_BASE, 0);
                 }
 
                 this->accurate_seek_time = this->seek_pos / (double)AV_TIME_BASE;
@@ -1305,8 +1332,8 @@ int FFFmpegMediaTracks::read_thread()
                     continue;
                 }
                 this->show_pic = true; //应该处理精准跳转时丢弃图片帧问题todo
-                this->videoq.Put(pkt);
-                this->videoq.PutNullpacket(pkt, this->video_stream);
+                this->videoq.packet_queue_put(pkt);
+                this->videoq.packet_queue_put_nullpacket(pkt, this->video_stream);
             }
             this->queue_attachments_req = 0;
         }
@@ -1319,15 +1346,15 @@ int FFFmpegMediaTracks::read_thread()
                     stream_has_enough_packets(this->subtitle_st, this->subtitle_stream, &this->subtitleq)))) {
             /* wait 10 ms */
             wait_mutex->Lock();
-            continue_read_thread->waitTimeout(*wait_mutex, 10);
+            continue_read_thread->WaitTimeout(wait_mutex, 10);
             wait_mutex->Unlock();
             continue;
         }
 
         //播放完毕，判断是否需要重新播放
         if (!this->paused &&
-            (!this->audio_st || (this->auddec->GetFinished() == this->audioq.serial && this->sampq.NbRemaining() == 0)) &&
-            (!this->video_st || (this->viddec->GetFinished() == this->videoq.serial && this->pictq.NbRemaining() == 0))) {
+            (!this->audio_st || (this->auddec->finished == this->audioq.serial && this->sampq.frame_queue_nb_remaining() == 0)) &&
+            (!this->video_st || (this->viddec->finished == this->videoq.serial && this->pictq.frame_queue_nb_remaining() == 0))) {
 
             //等待样本读取完毕:
             if (this->get_master_sync_type() == AV_SYNC_AUDIO_MASTER) { //音频等待读取完，音频速度快，没播放完样本数一定大于0
@@ -1358,11 +1385,11 @@ int FFFmpegMediaTracks::read_thread()
         if (ret < 0) {
             if ((ret == AVERROR_EOF || avio_feof(ic->pb)) && !this->eof) { //读取完毕处理
                 if (this->video_stream >= 0)
-                    this->videoq.PutNullpacket(pkt, this->video_stream);
+                    this->videoq.packet_queue_put_nullpacket(pkt, this->video_stream);
                 if (this->audio_stream >= 0)
-                    this->audioq.PutNullpacket(pkt, this->audio_stream);
+                    this->audioq.packet_queue_put_nullpacket(pkt, this->audio_stream);
                 if (this->subtitle_stream >= 0)
-                    this->subtitleq.PutNullpacket(pkt, this->subtitle_stream);
+                    this->subtitleq.packet_queue_put_nullpacket(pkt, this->subtitle_stream);
                 this->eof = 1;
             }
             if (ic->pb && ic->pb->error) {
@@ -1370,7 +1397,7 @@ int FFFmpegMediaTracks::read_thread()
                 continue;
             }
             wait_mutex->Lock();
-            continue_read_thread->waitTimeout(*wait_mutex, 10);
+            continue_read_thread->WaitTimeout(wait_mutex, 10);
             wait_mutex->Unlock();
             continue;
         }
@@ -1386,14 +1413,14 @@ int FFFmpegMediaTracks::read_thread()
             (double)(start_time != AV_NOPTS_VALUE ? start_time : 0) / 1000000
             <= ((double)duration / 1000000);
         if (pkt->stream_index == this->audio_stream && pkt_in_play_range) {
-            this->audioq.Put(pkt);
+            this->audioq.packet_queue_put(pkt);
         }
         else if (pkt->stream_index == this->video_stream && pkt_in_play_range
             && !(this->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
-            this->videoq.Put(pkt);
+            this->videoq.packet_queue_put(pkt);
         }
         else if (pkt->stream_index == this->subtitle_stream && pkt_in_play_range) {
-            this->subtitleq.Put(pkt);
+            this->subtitleq.packet_queue_put(pkt);
         }
         else {
             av_packet_unref(pkt);
@@ -1417,7 +1444,7 @@ void FFFmpegMediaTracks::stream_seek(int64_t pos, int64_t rel, int by_bytes)
             this->seek_flags |= AVSEEK_FLAG_BYTE;
         this->seek_flags = AVSEEK_FLAG_BACKWARD;// 保证seek到ts一定在要精准seek时间之前，否则精准seek会出问题
         this->seek_req = 1;
-        this->continue_read_thread->signal();
+        this->continue_read_thread->Signal();
     }
 }
 
@@ -1531,15 +1558,16 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         this->audio_st = ic->streams[stream_index];
 
         //初始化音频解码器
-        ret = this->auddec->Init(avctx, &this->audioq, this->continue_read_thread);
+        ret = this->auddec->decoder_init(avctx, &this->audioq, this->continue_read_thread);
         if (ret < 0)
             goto fail;
         if ((this->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !this->ic->iformat->read_seek) {
-            this->auddec->SetStartPts(this->audio_st->start_time);
-            this->auddec->SetStartPtsTb(this->audio_st->time_base);
+            
+            this->auddec->start_pts = this->audio_st->start_time;
+            this->auddec->start_pts_tb = this->audio_st->time_base;
         }
         //启用音频线程
-        if ((ret = auddec->Start(TEXT("AudioThread"), [this] { audio_thread();})) < 0) {
+        if ((ret = auddec->decoder_start(TEXT("AudioThread"), [this] { audio_thread();})) < 0) {
             av_dict_free(&opts);
             return ret;
         }
@@ -1554,11 +1582,11 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         this->video_avctx = avctx;
         this->video_stream = stream_index;
         this->video_st = ic->streams[stream_index];
-        ret = this->viddec->Init(avctx, &this->videoq, this->continue_read_thread);
+        ret = this->viddec->decoder_init(avctx, &this->videoq, this->continue_read_thread);
         if (ret < 0)
             goto fail;
         //启用视频线程
-        if ((ret = viddec->Start(TEXT("VideoThread"), [this] { video_thread();})) < 0) {
+        if ((ret = viddec->decoder_start(TEXT("VideoThread"), [this] { video_thread();})) < 0) {
             goto out;
         }
       /*  if ((ret = viddec->Start([this](void* data) {return video_thread();}, NULL)) < 0) {
@@ -1570,11 +1598,11 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[subtitle] %i"), this, stream_index);
         this->subtitle_stream = stream_index;
         this->subtitle_st = ic->streams[stream_index];
-        ret = this->subdec->Init(avctx, &this->subtitleq, this->continue_read_thread);
+        ret = this->subdec->decoder_init(avctx, &this->subtitleq, this->continue_read_thread);
         if (ret < 0)
             goto fail;
         //启用字幕线程
-        if ((ret = subdec->Start(TEXT("SubtitleThread"), [this] { subtitle_thread();})) < 0) {
+        if ((ret = subdec->decoder_start(TEXT("SubtitleThread"), [this] { subtitle_thread();})) < 0) {
             goto out;
         }
         break;
@@ -1602,8 +1630,8 @@ void FFFmpegMediaTracks::stream_component_close(int stream_index)
 
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
-        this->auddec->Abort(&this->sampq);
-        this->auddec->Destroy();
+        this->auddec->decoder_abort(&this->sampq);
+        this->auddec->decoder_destroy();
         if (this->swr_ctx) {
             swr_free(&this->swr_ctx);
         }
@@ -1621,12 +1649,12 @@ void FFFmpegMediaTracks::stream_component_close(int stream_index)
         }
         break;
     case AVMEDIA_TYPE_VIDEO:
-        this->viddec->Abort(&this->pictq);
-        this->viddec->Destroy();
+        this->viddec->decoder_abort(&this->pictq);
+        this->viddec->decoder_destroy();
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        this->subdec->Abort(&this->subpq);
-        this->subdec->Destroy();
+        this->subdec->decoder_abort(&this->subpq);
+        this->subdec->decoder_destroy();
         break;
     default:
         break;
@@ -1666,7 +1694,7 @@ int FFFmpegMediaTracks::audio_thread()
     }
 
     do {
-        got_frame = this->auddec->DecodeFrame(frame, NULL); //解码帧
+        got_frame = this->auddec->decoder_decode_frame(frame, NULL); //解码帧
         if (got_frame < 0) {
             av_frame_free(&frame);
             UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because decode frame fail"), this);
@@ -1674,7 +1702,7 @@ int FFFmpegMediaTracks::audio_thread()
         }
         if (got_frame) {
             tb = { 1, frame->sample_rate };
-            af = this->sampq.PeekWritable();
+            af = this->sampq.frame_queue_peek_writable();
             if (!af) {
                 av_frame_free(&frame);
                 UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because peek a writable frame fail"), this);
@@ -1696,7 +1724,7 @@ int FFFmpegMediaTracks::audio_thread()
                 }
             }
             av_frame_move_ref(af->frame, frame);
-            this->sampq.Push();
+            this->sampq.frame_queue_push();
         }
     } while (ret >= 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF);
 
@@ -1745,7 +1773,7 @@ int FFFmpegMediaTracks::video_thread()
         }
 
 
-        ret = queue_picture(frame, pts, duration, frame->pkt_pos, this->viddec->GetPktSerial());
+        ret = queue_picture(frame, pts, duration, frame->pkt_pos, this->viddec->pkt_serial);
         av_frame_unref(frame);
         if (ret < 0) {
             UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because picture queue fail"), this);
@@ -1767,18 +1795,18 @@ int FFFmpegMediaTracks::subtitle_thread()
     double pts;
 
     for (;;) {
-        sp = this->subpq.PeekWritable();
+        sp = this->subpq.frame_queue_peek_writable();
         if (!sp) {
             UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: SubtitleThread exit because peek a writable frame fail"), this);
             return 0;
         }
 
-        got_subtitle = this->subdec->DecodeFrame(NULL, &sp->sub);
+        got_subtitle = this->subdec->decoder_decode_frame(NULL, &sp->sub);
         if (got_subtitle < 0)
             break;
         pts = 0;
 
-        if (got_subtitle && sp->GetSub().format == 0) {
+        if (got_subtitle && sp->sub.format == 0) {
             if (sp->sub.pts != AV_NOPTS_VALUE)
                 pts = sp->sub.pts / (double)AV_TIME_BASE;
             sp->pts = pts;
@@ -1795,7 +1823,7 @@ int FFFmpegMediaTracks::subtitle_thread()
                     this->accurate_subtitle_seek_flag = 0;
                 }
             }
-            this->subpq.Push();
+            this->subpq.frame_queue_push();
         }
         else if (got_subtitle) {
             avsubtitle_free(&sp->sub);
@@ -1849,13 +1877,13 @@ double FFFmpegMediaTracks::get_master_clock()
 
     switch (this->get_master_sync_type()) {
     case AV_SYNC_VIDEO_MASTER:
-        val = this->vidclk.Get();
+        val = this->vidclk.get_clock();
         break;
     case AV_SYNC_AUDIO_MASTER:
-        val = this->audclk.Get();
+        val = this->audclk.get_clock();
         break;
     default:
-        val = this->extclk.Get();
+        val = this->extclk.get_clock();
         break;
     }
     return val;
@@ -1866,16 +1894,16 @@ void FFFmpegMediaTracks::check_external_clock_speed()
 {
     if ((this->video_stream >= 0 && this->videoq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES) ||
         (this->audio_stream >= 0 && this->audioq.nb_packets <= EXTERNAL_CLOCK_MIN_FRAMES)) {
-        this->extclk.SetSpeed(FFMAX(EXTERNAL_CLOCK_SPEED_MIN, this->extclk.GetSpeed() - EXTERNAL_CLOCK_SPEED_STEP));
+        this->extclk.set_clock_speed(FFMAX(EXTERNAL_CLOCK_SPEED_MIN, this->extclk.speed - EXTERNAL_CLOCK_SPEED_STEP));
     }
     else if ((this->video_stream < 0 || this->videoq.nb_packets > EXTERNAL_CLOCK_MAX_FRAMES) &&
         (this->audio_stream < 0 || this->audioq.nb_packets > EXTERNAL_CLOCK_MAX_FRAMES)) {
-        this->extclk.SetSpeed(FFMIN(EXTERNAL_CLOCK_SPEED_MAX, this->extclk.GetSpeed() + EXTERNAL_CLOCK_SPEED_STEP));
+        this->extclk.set_clock_speed(FFMIN(EXTERNAL_CLOCK_SPEED_MAX, this->extclk.speed + EXTERNAL_CLOCK_SPEED_STEP));
     }
     else {
-        double speed = this->extclk.GetSpeed();
+        double speed = this->extclk.speed;
         if (speed != 1.0) {
-            this->extclk.SetSpeed(speed + EXTERNAL_CLOCK_SPEED_STEP * (1.0 - speed) / fabs(1.0 - speed));
+            this->extclk.set_clock_speed(speed + EXTERNAL_CLOCK_SPEED_STEP * (1.0 - speed) / fabs(1.0 - speed));
         }
     }
 }
@@ -1903,10 +1931,10 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
         return -1;
 
     do {
-        af = this->sampq.PeekReadable();
+        af = this->sampq.frame_queue_peek_readable();
         if (!af)
             return -1;
-        this->sampq.Next();
+        this->sampq.frame_queue_next();
     } while (af->serial != this->audioq.serial);
 
     //计算音频样本数据大小
@@ -1982,7 +2010,7 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
     this->audio_clock_serial = af->serial;
 
     time = FTimespan::FromSeconds(this->audio_clock);
-    duration = FTimespan::FromSeconds(af->GetDuration());
+    duration = FTimespan::FromSeconds(af->duration);
     return resampled_data_size;
 }
 
@@ -1996,7 +2024,7 @@ int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
         double diff, avg_diff;
         int min_nb_samples, max_nb_samples;
 
-        diff = this->audclk.Get() - this->get_master_clock();
+        diff = this->audclk.get_clock() - this->get_master_clock();
 
         if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD) {
             this->audio_diff_cum = diff + this->audio_diff_avg_coef * this->audio_diff_cum;
@@ -2057,7 +2085,7 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
     //此处删除音频波形显示代码
     if (this->video_st) {
     retry:
-        if (this->pictq.NbRemaining() == 0) { //判断是否有剩余帧
+        if (this->pictq.frame_queue_nb_remaining() == 0) { //判断是否有剩余帧
             // nothing to do, no picture to display in the queue
         }
         else {
@@ -2065,16 +2093,16 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
             FFmpegFrame* vp, * lastvp;
 
             /* dequeue the picture */
-            lastvp = this->pictq.PeekLast(); //上一帧(正在显示的)
-            vp = this->pictq.Peek(); //当前帧(正要显示的)
+            lastvp = this->pictq.frame_queue_peek_last(); //上一帧(正在显示的)
+            vp = this->pictq.frame_queue_peek(); //当前帧(正要显示的)
 
-            if (vp->GetSerial() != this->videoq.serial) { //丢弃无效的Frame
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame %d, %f"), this, vp->GetSerial(), vp->GetPts());
-                this->pictq.Next();
+            if (vp->serial != this->videoq.serial) { //丢弃无效的Frame
+                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame %d, %f"), this, vp->serial, vp->pts);
+                this->pictq.frame_queue_peek_next();
                 goto retry;
             }
 
-            if (lastvp->GetSerial() != vp->GetSerial())
+            if (lastvp->serial != vp->serial)
                 this->frame_timer = av_gettime_relative() / 1000000.0; //设置当前帧显示的时间
 
             if (this->paused)//暂停状态
@@ -2094,37 +2122,37 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
             if (delay > 0 && time - this->frame_timer > AV_SYNC_THRESHOLD_MAX) //如果系统时间与当前帧的显示时长大于0.1，则重置frame_timer为系统时间 
                 this->frame_timer = time;
 
-            this->pictq.GetMutex()->Lock();
+            this->pictq.mutex->Lock();
             if (!isnan(vp->pts)) {
                 this->update_video_pts(vp->pts, vp->pos, vp->serial);
             }
-            this->pictq.GetMutex()->Unlock();
+            this->pictq.mutex->Unlock();
 
             //丢弃帧的逻辑
             int framedrop = -1;//todo:
-            if (this->pictq.NbRemaining() > 1) {
-                FFmpegFrame* nextvp = this->pictq.PeekNext();
+            if (this->pictq.frame_queue_nb_remaining() > 1) {
+                FFmpegFrame* nextvp = this->pictq.frame_queue_peek_next();
                 duration = this->vp_duration(vp, nextvp);
                 //重要判断time > this->frame_timer + duration，检查播放的帧是否已经过期
                 if ((framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) && time > this->frame_timer + duration) {
                     this->frame_drops_late++;
-                    this->pictq.Next();
+                    this->pictq.frame_queue_peek_next();
                     goto retry;
                 }
             }
             //字幕处理
             if (this->subtitle_st) {
-                while (this->subpq.NbRemaining() > 0) {
-                    sp = this->subpq.Peek();
+                while (this->subpq.frame_queue_nb_remaining() > 0) {
+                    sp = this->subpq.frame_queue_peek();
 
-                    if (this->subpq.NbRemaining() > 1)
-                        sp2 = this->subpq.PeekNext();
+                    if (this->subpq.frame_queue_nb_remaining() > 1)
+                        sp2 = this->subpq.frame_queue_peek_next();
                     else
                         sp2 = NULL;
 
-                    if (sp->GetSerial() != this->subtitleq.serial
-                        || (this->vidclk.GetPts() > (sp->GetPts() + ((float)sp->GetSub().end_display_time / 1000)))
-                        || (sp2 && this->vidclk.GetPts() > (sp2->GetPts() + ((float)sp2->GetSub().start_display_time / 1000))))
+                    if (sp->serial != this->subtitleq.serial
+                        || (this->vidclk.pts > (sp->pts) + ((float)sp->sub.end_display_time / 1000))
+                        || (sp2 && this->vidclk.pts > (sp2->pts + ((float)sp2->sub.start_display_time / 1000))))
                     {
                         /* if (sp->GetUploaded()) {
                              int i;
@@ -2140,7 +2168,7 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
                                  }
                              }
                          }*/
-                        this->subpq.Next();
+                        this->subpq.frame_queue_peek_next();
                     }
                     else {
                         break;
@@ -2148,14 +2176,14 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
                 }
             }
 
-            this->pictq.Next();
+            this->pictq.frame_queue_peek_next();
             this->force_refresh = 1; //强制刷新
             //if (this->step && !this->paused) //todo: 暂时没有逐帧播放功能
             //    this->stream_toggle_pause();
         }
     display:
         /* display picture 注意retry中force_refresh的控制，决定是否显示画面*/
-        if (this->force_refresh && this->pictq.GetRindexShown())
+        if (this->force_refresh && this->pictq.rindex_shown)
             video_display();
     }
     this->force_refresh = 0; //重置强制刷新状态
@@ -2164,7 +2192,7 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
 /**获取视频帧*/
 int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
 {
-    int got_picture = this->viddec->DecodeFrame(frame, NULL);
+    int got_picture = this->viddec->decoder_decode_frame(frame, NULL);
 
     if (got_picture < 0)
         return -1;
@@ -2198,7 +2226,7 @@ int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
                 double diff = dpts - this->get_master_clock();
                 if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD &&
                     diff - this->frame_last_filter_delay < 0 &&
-                    this->viddec->GetPktSerial() == this->vidclk.GetSerial() &&
+                    this->viddec->pkt_serial == this->vidclk.serial &&
                     this->videoq.nb_packets) {
                     this->frame_drops_early++;
                     av_frame_unref(frame);
@@ -2214,24 +2242,24 @@ int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
 /** 图片入列 */
 int FFFmpegMediaTracks::queue_picture(AVFrame* src_frame, double pts, double duration, int64_t pos, int serial)
 {
-    FFmpegFrame* vp = this->pictq.PeekWritable();
+    FFmpegFrame* vp = this->pictq.frame_queue_peek_writable();
     if (!vp)
         return -1;
 
-    vp->SetSar(src_frame->sample_aspect_ratio);
-    vp->SetUploaded(0);
+    vp->sar = src_frame->sample_aspect_ratio;
+    vp->uploaded = 0;
 
-    vp->SetWidth(src_frame->width);
-    vp->SetHeight(src_frame->height);
-    vp->SetFormat(src_frame->format);
+    vp->width =src_frame->width;
+    vp->height =src_frame->height;
+    vp->format =src_frame->format;
 
-    vp->SetPts(pts);
-    vp->SetDuration(duration);
-    vp->SetPos(pos);
-    vp->SetSerial(serial);
+    vp->pts=pts;
+    vp->duration=duration;
+    vp->pos=pos;
+    vp->serial=serial;
 
-    av_frame_move_ref(vp->GetFrame(), src_frame);
-    this->pictq.Push();
+    av_frame_move_ref(vp->frame, src_frame);
+    this->pictq.frame_queue_push();
     return 0;
 }
 
@@ -2239,27 +2267,27 @@ int FFFmpegMediaTracks::queue_picture(AVFrame* src_frame, double pts, double dur
 void FFFmpegMediaTracks::stream_toggle_pause()
 {
     if (this->paused) {
-        this->frame_timer += av_gettime_relative() / 1000000.0 - this->vidclk.GetLastUpdated();
+        this->frame_timer += av_gettime_relative() / 1000000.0 - this->vidclk.last_updated;
         if (this->read_pause_return != AVERROR(ENOSYS)) {
-            this->vidclk.SetPaused(0);
+            this->vidclk.paused = 0;
         }
-        this->vidclk.Set(this->vidclk.Get(), this->vidclk.GetSerial());
+        this->vidclk.set_clock(this->vidclk.get_clock(), this->vidclk.serial);
     }
-    this->extclk.Set(this->extclk.Get(), this->extclk.GetSerial());
+    this->extclk.set_clock(this->extclk.get_clock(), this->extclk.serial);
     this->paused = this->paused == 1 ? 0 : 1;
     UE_LOG(LogFFmpegMedia, Warning, TEXT("Player %p: stream_toggle_pause this->paused %d"), this, this->paused);
-    this->audclk.SetPaused(this->paused);
-    this->vidclk.SetPaused(this->paused);
-    this->extclk.SetPaused(this->paused);
+    this->audclk.paused = this->paused;
+    this->vidclk.paused = this->paused;
+    this->extclk.paused = this->paused;
 }
 
 /** 计算时长 */
 double FFFmpegMediaTracks::vp_duration(FFmpegFrame* vp, FFmpegFrame* nextvp)
 {
-    if (vp->GetSerial() == nextvp->GetSerial()) {
-        double duration = nextvp->GetPts() - vp->GetPts();
+    if (vp->serial == nextvp->serial) {
+        double duration = nextvp->pts - vp->pts;
         if (isnan(duration) || duration <= 0 || duration > this->max_frame_duration)
-            return vp->GetDuration();
+            return vp->duration;
         else
             return duration;
     }
@@ -2277,7 +2305,7 @@ double FFFmpegMediaTracks::compute_target_delay(double delay)
     if (this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER) {
         /* if video is slave, we try to correct big delays by
            duplicating or deleting a frame */
-        diff = this->vidclk.Get() - this->get_master_clock();
+        diff = this->vidclk.get_clock() - this->get_master_clock();
 
         /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
@@ -2303,8 +2331,8 @@ double FFFmpegMediaTracks::compute_target_delay(double delay)
 void FFFmpegMediaTracks::update_video_pts(double pts, int64_t pos, int serial)
 {
     /* update current video pts */
-    this->vidclk.Set(pts, serial);
-    this->extclk.SyncToSlave(&this->vidclk);
+    this->vidclk.set_clock(pts, serial);
+    this->extclk.sync_clock_to_slave(&this->vidclk);
 }
 
 /** 视频显示 */
@@ -2319,15 +2347,15 @@ void FFFmpegMediaTracks::video_image_display()
 {
     FFmpegFrame* vp;
     FFmpegFrame* sp = NULL;
-    vp = this->pictq.PeekLast(); //读取上一帧(注意此处的帧为将要显示的帧，不是显示过的帧)
+    vp = this->pictq.frame_queue_peek_last(); //读取上一帧(注意此处的帧为将要显示的帧，不是显示过的帧)
 
     //字幕处理
     if (this->subtitle_st) {
-        if (this->subpq.NbRemaining() > 0) {
-            sp = this->subpq.Peek();
+        if (this->subpq.frame_queue_nb_remaining() > 0) {
+            sp = this->subpq.frame_queue_peek();
 
-            if (vp->GetPts() >= sp->GetPts() + ((float)sp->GetSub().start_display_time / 1000)) {
-                if (!sp->GetUploaded()) {
+            if (vp->pts >= sp->pts + ((float)sp->sub.start_display_time / 1000)) {
+                if (!sp->uploaded) {
                     //uint8_t* pixels[4];
                     //int pitch[4];
                     unsigned int i;
@@ -2437,10 +2465,10 @@ int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
             //根据帧初始化该对象
             FIntPoint Dim = { frame->width, frame->height };
             FTimespan time = FTimespan::FromSeconds(0);
-            if (!isnan(vp->GetPts())) {
-                time = FTimespan::FromSeconds(vp->GetPts());
+            if (!isnan(vp->pts)) {
+                time = FTimespan::FromSeconds(vp->pts);
             }
-            FTimespan duration = FTimespan::FromSeconds(vp->GetDuration());
+            FTimespan duration = FTimespan::FromSeconds(vp->duration);
             if (TextureSample->Initialize(
                 ImgaeCopyDataBuffer.GetData(),
                 ImgaeCopyDataBuffer.Num(),
@@ -2450,7 +2478,7 @@ int FFFmpegMediaTracks::upload_texture(FFmpegFrame* vp, AVFrame* frame)
                 duration))
             {
                 //将样本对象放入样本队列中
-                UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks%p: VideoSampleQueue Enqueue %s %f"), this, *TextureSample.Get().GetTime().Time.ToString(), vp->GetDuration());
+                UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks%p: VideoSampleQueue Enqueue %s %f"), this, *TextureSample.Get().GetTime().Time.ToString(), vp->duration);
                 this->MediaSamples->AddVideo(TextureSample);
             }
         }

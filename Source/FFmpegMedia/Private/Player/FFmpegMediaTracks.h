@@ -127,6 +127,9 @@ public:
 	 */
 	void Initialize(AVFormatContext* IC, const FString & Url, const FMediaPlayerOptions * PlayerOptions);
 
+	int stream_open();
+	void stream_close();
+
 	/** 将ffmpeg流信息添加到轨道集合 */
 	bool AddStreamToTracks(uint32 StreamIndex, const FMediaPlayerTrackOptions& TrackOptions, FString& OutInfo);
 
@@ -408,6 +411,7 @@ private:
 	int abort_request; // 请求中断
 	int paused; //停止
 	int eof;  // 结束标志
+	int muted; //是否静音
 
 	int queue_attachments_req; //队列附件请求, attached_pic的意思是有附带的图片。比如说一些MP3，AAC音频文件附带的专辑封面。所以，就是如果有，就去显示吧。
 

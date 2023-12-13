@@ -29,34 +29,37 @@ FFmpegMediaPlayer::~FFmpegMediaPlayer()
 {
 }
 
-/** [Custom] 初始化播放器 */
+/**
+ * @brief 初始化播放器
+ * @param Archive 附件
+ * @param Url 播放地址
+ * @param Precache 是否预缓存
+ * @param PlayerOptions 播放器选项
+ * @return 
+*/
 bool FFmpegMediaPlayer::InitializePlayer(const TSharedPtr<FArchive, ESPMode::ThreadSafe>& Archive, const FString& Url, bool Precache, const FMediaPlayerOptions* PlayerOptions)
 {
     UE_LOG(LogFFmpegMedia, Verbose, TEXT("Player %p: Initializing %s (archive = %s, precache = %s)"), this, *Url, Archive.IsValid() ? TEXT("yes") : TEXT("no"), Precache ? TEXT("yes") : TEXT("no"));
 
-    //设置当前媒体地址
-    MediaUrl = Url;
+    this->MediaUrl = Url; //设置当前播放地址
 
-    //根据是否预加载创建异步执行器
-    const EAsyncExecution Execution = Precache ? EAsyncExecution::Thread : EAsyncExecution::ThreadPool;
+    const EAsyncExecution Execution = Precache ? EAsyncExecution::Thread : EAsyncExecution::ThreadPool; //创建异步执行器
 
-    //创建异步任务并执行，
-    TFunction <void()>  Task = [Archive, Url, Precache, PlayerOptions, TracksPtr = TWeakPtr<FFFmpegMediaTracks, ESPMode::ThreadSafe>(Tracks), ThisPtr = this]()
-    {
-        //获取轨道对象Tracks的弱引用
-        TSharedPtr<FFFmpegMediaTracks, ESPMode::ThreadSafe> PinnedTracks = TracksPtr.Pin();
-
-        if (PinnedTracks.IsValid())
+    Async(Execution, [Archive, Url, Precache, PlayerOptions, TracksPtr = TWeakPtr<FFFmpegMediaTracks, ESPMode::ThreadSafe>(Tracks), ThisPtr = this]()
         {
-            //读取媒体信息，获取AVFormatContext 
-            AVFormatContext* context = ThisPtr->ReadContext(Archive, Url, Precache);
-            if (context) {
-                //通过AVFormatContext初始化轨道对象
-                PinnedTracks->Initialize(context, Url, PlayerOptions);
+            //轨道对象Tracks的弱引用
+            TSharedPtr<FFFmpegMediaTracks, ESPMode::ThreadSafe> PinnedTracks = TracksPtr.Pin();
+
+            if (PinnedTracks.IsValid())
+            {
+                //读取媒体信息，获取AVFormatContext 
+                AVFormatContext* context = ThisPtr->ReadContext(Archive, Url, Precache);
+                if (context) {
+                    //通过AVFormatContext初始化轨道对象
+                    PinnedTracks->Initialize(context, Url, PlayerOptions);
+                }
             }
-        }
-    };
-    Async(Execution, Task);
+        });
     return true;
 }
 
@@ -66,48 +69,49 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
     //取消中断
     this->abort_request = 0;
 
-    int err, ret;
-    const AVDictionaryEntry* t;
+    int err,ret;
     int scan_all_pmts_set = 0;
-    int genpts = 0; //生成pts, 默认为0
-    int orig_nb_streams = 0;
-    const auto Settings = GetDefault<UFFmpegMediaSettings>();
-    AVDictionary* format_opts = NULL;
+    const AVDictionaryEntry* t;
+    AVFormatContext* ic_ = nullptr;
+    AVDictionary* format_opts = nullptr;
+    ic_ = avformat_alloc_context(); //分配上下文
+    int genpts = 0; //生成pts, 默认为0 todo: 放入setting中
 
-    ic = avformat_alloc_context(); //分配上下文
-    if (!ic) {
+    if (!ic_) {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Could not allocate context"), this);
         ret = AVERROR(ENOMEM);
         goto fail;
     }
-    ic->interrupt_callback.callback = decode_interrupt_cb; // 设置超时回调
-    ic->interrupt_callback.opaque = this;
-  
+
+    ic_->interrupt_callback.callback = decode_interrupt_cb;// 设置超时回调
+    ic_->interrupt_callback.opaque = this;
     if (!av_dict_get(format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
     }
 
-    if (!Archive.IsValid()) {//如果附件对象不可用，则获取Url
+    if (!Archive.IsValid()) //如果附件对象不可用，则获取Url
+    {
         if (Url.StartsWith(TEXT("file://")))//如果是文件开头
         {
             const char* fileName = TCHAR_TO_UTF8(&Url[7]);
             AVDictionary* opts = NULL;
-            err = avformat_open_input(&ic, fileName, NULL, &format_opts);
+            err = avformat_open_input(&ic_, fileName, NULL, &format_opts);
         }
         else {
-            err = avformat_open_input(&ic, TCHAR_TO_UTF8(*Url), NULL, &format_opts);
+            err = avformat_open_input(&ic_, TCHAR_TO_UTF8(*Url), NULL, &format_opts);
         }
     }
-    else { //如果是附件，则转化成内存文件
+    else //如果是附件，则转化成内存文件
+    { 
         UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Unsupport Archive..."), this);
         return NULL;
         CurrentArchive = Archive;
         const int ioBufferSize = 32768;
         unsigned char* ioBuffer = (unsigned char*)av_malloc(ioBufferSize + FF_INPUT_BUFFER_PADDING_SIZE);
         IOContext = avio_alloc_context(ioBuffer, ioBufferSize, 0, this, ReadtStreamCallback, NULL, SeekStreamCallback);
-        ic->pb = IOContext;
-        err = avformat_open_input(&ic, "InMemoryFile", NULL, &format_opts);
+        ic_->pb = IOContext;
+        err = avformat_open_input(&ic_, "InMemoryFile", NULL, &format_opts);
     }
 
     if (err < 0) {
@@ -117,6 +121,7 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
         ret = -1;
         goto fail;
     }
+
     if (scan_all_pmts_set)
         av_dict_set(&format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
 
@@ -127,23 +132,21 @@ AVFormatContext* FFmpegMediaPlayer::ReadContext(const TSharedPtr<FArchive, ESPMo
         goto fail;
     }
 
-   
+    this->ic = ic_;
     if (genpts)
-        ic->flags |= AVFMT_FLAG_GENPTS;
+        this->ic->flags |= AVFMT_FLAG_GENPTS;
 
-    av_format_inject_global_side_data(ic);
-
-    orig_nb_streams = ic->nb_streams;
-    err = avformat_find_stream_info(ic, NULL);
+    err = avformat_find_stream_info(ic, nullptr);
     if (err < 0) {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: could not find codec parameters."), this);
         ret = -1;
         goto fail;
     }
 
+    //const auto Settings = GetDefault<UFFmpegMediaSettings>();
     if (ic->pb)
         ic->pb->eof_reached = 0; // FIXME hack, ffplay maybe should not use avio_feof() to test for the end
-
+    
     return ic;
 fail:
     if (!ic) {
@@ -154,7 +157,7 @@ fail:
         //发送媒体打开失败事件
         EventSink.ReceiveMediaEvent(EMediaEvent::MediaOpenFailed);
     }
-    return NULL;
+    return nullptr;
 }
 
 int FFmpegMediaPlayer::decode_interrupt_cb(void* ctx)
@@ -201,54 +204,39 @@ int64_t FFmpegMediaPlayer::SeekStreamCallback(void* opaque, int64_t offset, int 
 
 }
 
-/* IMediaPlayer 接口实现 */
+/* IMediaPlayer 接口实现 开始*/
 /* ***************************************************************************** */
-/** [UE4 IMediaPlayer]关闭打开的媒体源 */
-//参考 FWmfMediaPlayer
-/** [UE4 IMediaPlayer]根据Url和可选参数打开媒体源 */
 bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options)
 {
-    //打开新媒体之前，先关闭旧媒体
-    Close();
-
-    //如果媒体地址为空，直接返回
-    if (Url.IsEmpty())
-    {
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p:Cannot open media from url(url is empty)"), this);
-        return false;
-    }
-    UE_LOG(LogFFmpegMedia, Log, TEXT("Player %p: Open Media Source[Url]: [%s]"), this, *Url);
-    //是否预加载(todo: 该参数无用)
-    const bool Precache = (Options != nullptr) ? Options->GetMediaOption("PrecacheFile", false) : false;
-    bool ret = InitializePlayer(nullptr, Url, Precache, nullptr);
-    return ret;
+    return Open(Url, Options, nullptr);
 }
 
 bool FFmpegMediaPlayer::Open(const FString& Url, const IMediaOptions* Options, const FMediaPlayerOptions* PlayerOptions)
 {
-  /*  FName name = "nnnn";
-    FString dv = "";
-    FString name22 = Options->GetMediaOption(name, dv);*/
-    //打开新媒体之前，先关闭旧媒体
-    Close();
-    //如果媒体地址为空，直接返回
+    Close(); //关闭旧媒体
+
     if (Url.IsEmpty())
     {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p:Cannot open media from url(url is empty)"), this);
         return false;
     }
+
     UE_LOG(LogFFmpegMedia, Log, TEXT("Player %p: Open Media Source[Url]: [%s]"), this, *Url);
-    //是否预加载(todo: 该参数无用)
+
     const bool Precache = (Options != nullptr) ? Options->GetMediaOption("PrecacheFile", false) : false;
-    bool ret = InitializePlayer(nullptr, Url, Precache, nullptr);
-    return ret;
+    return InitializePlayer(nullptr, Url, Precache, nullptr);
 }
 
-/** [UE4 IMediaPlayer]根据文件或内存归档和可选参数打开媒体源 */
+/**
+ * @brief 根据文件或内存归档和可选参数打开媒体源
+ * @param Archive 
+ * @param OriginalUrl 
+ * @param Options 
+ * @return 
+*/
 bool FFmpegMediaPlayer::Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Archive, const FString& OriginalUrl, const IMediaOptions* Options)
 {
-    //打开新媒体之前，先关闭旧媒体
-    Close();
+    Close(); //关闭旧媒体
 
     if (Archive->TotalSize() == 0)
     {
@@ -269,26 +257,22 @@ bool FFmpegMediaPlayer::Open(const TSharedRef<FArchive, ESPMode::ThreadSafe>& Ar
 void FFmpegMediaPlayer::Close()
 {
     UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaPlayer %p: Close ...."), this);
-    //如果媒体轨道对象的状态等于关闭状态，直接返回
-    if (Tracks->GetState() == EMediaState::Closed)
+    if (Tracks->GetState() == EMediaState::Closed) //如果轨道对象状态为关闭，直接返回
     {
         return;
     }
     
     //中断
     this->abort_request = 1;
-    //初始化MeidaUrl为空
-    this->MediaUrl = FString();
-    //关闭轨道
-    this->Tracks->Shutdown();
+
+    this->MediaUrl = FString(); //重置MeidaUrl
+    this->Tracks->Shutdown();  //关闭轨道
 
     //清除ffmpeg资源占用
-    if (ic) {
-        //ic->video_codec = NULL;
-        //ic->audio_codec = NULL;
+    if (this->ic) {
         //todo: 已经在Tracks中关闭了，二次关闭会报错
         //avformat_close_input(&IC);
-        ic = nullptr;
+        this->ic = nullptr;
     }
 
     //清除FFmpeg IOContext(读取内存文件时才会存在)
@@ -364,7 +348,6 @@ bool FFmpegMediaPlayer::GetPlayerFeatureFlag(EFeatureFlag flag) const
 
 IMediaCache& FFmpegMediaPlayer::GetCache()
 {
-	//本类已实现IMediaCache，返回自身即可
 	return *this;
 }
 
