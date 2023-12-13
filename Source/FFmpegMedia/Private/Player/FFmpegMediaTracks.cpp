@@ -340,7 +340,7 @@ void FFFmpegMediaTracks::Shutdown()
     //销毁线程
     //关闭display线程
     if (displayThread != nullptr) {
-        displayThread->WaitForCompletion();
+       // displayThread->WaitForCompletion();
         displayThread = nullptr;
     }
     if (audioRenderThread != nullptr) {
@@ -1451,6 +1451,167 @@ void FFFmpegMediaTracks::stream_seek(int64_t pos, int64_t rel, int by_bytes)
 /** 打开指定的流 */
 int FFFmpegMediaTracks::stream_component_open(int stream_index)
 {
+    //AVFormatContext* ic = is->ic;
+    AVCodecContext* avctx;
+    const AVCodec* codec;
+    AVDictionary* opts = nullptr;
+    const AVDictionaryEntry* t = nullptr;
+    int sample_rate;
+    AVChannelLayout ch_layout = {};
+    int ret = 0;
+    int lowres = 0; //todo 低分辨率，默认为0 做成setting
+    int stream_lowres = lowres;
+    int fast = 0; //todo默认为0 做成setting
+
+    if (stream_index < 0 || stream_index >= ic->nb_streams)
+        return -1;
+
+    avctx = avcodec_alloc_context3(nullptr);
+    if (!avctx)
+        return AVERROR(ENOMEM);
+
+    ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar);
+    if (ret < 0)
+        goto fail;
+    avctx->pkt_timebase = ic->streams[stream_index]->time_base;
+
+    codec = avcodec_find_decoder(avctx->codec_id);
+
+    switch (avctx->codec_type) {
+    case AVMEDIA_TYPE_AUDIO: this->last_audio_stream = stream_index; break;
+    case AVMEDIA_TYPE_SUBTITLE: this->last_subtitle_stream = stream_index; break;
+    case AVMEDIA_TYPE_VIDEO: this->last_video_stream = stream_index; break;
+    }
+    if (!codec) {
+        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: No decoder could be found for codec %s"), this, avcodec_get_name(avctx->codec_id));
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
+
+    avctx->codec_id = codec->id;
+    if (stream_lowres > codec->max_lowres) {
+        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: The maximum value for lowres supported by the decoder is %d"), this, codec->max_lowres);
+        stream_lowres = codec->max_lowres;
+    }
+    avctx->lowres = stream_lowres;
+
+    if (fast)
+        avctx->flags2 |= AV_CODEC_FLAG2_FAST; //非标准化规范的多媒体兼容优化
+
+    ret = filter_codec_opts(codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec, &opts);
+    if (ret < 0)
+        goto fail;
+
+    if (!av_dict_get(opts, "threads", NULL, 0))
+        av_dict_set(&opts, "threads", "auto", 0);
+    if (stream_lowres)
+        av_dict_set_int(&opts, "lowres", stream_lowres, 0);
+
+    av_dict_set(&opts, "flags", "+copy_opaque", AV_DICT_MULTIKEY);
+
+    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO) {
+        ret = create_hwaccel(&avctx->hw_device_ctx);
+        if (ret < 0)
+            goto fail;
+    }
+
+    if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) {
+        goto fail;
+    }
+    if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
+        av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
+        ret = AVERROR_OPTION_NOT_FOUND;
+        goto fail;
+    }
+
+    is->eof = 0;
+    ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
+    switch (avctx->codec_type) {
+    case AVMEDIA_TYPE_AUDIO:
+    {
+        AVFilterContext* sink;
+
+        is->audio_filter_src.freq = avctx->sample_rate;
+        ret = av_channel_layout_copy(&is->audio_filter_src.ch_layout, &avctx->ch_layout);
+        if (ret < 0)
+            goto fail;
+        is->audio_filter_src.fmt = avctx->sample_fmt;
+        if ((ret = configure_audio_filters(is, afilters, 0)) < 0)
+            goto fail;
+        sink = is->out_audio_filter;
+        sample_rate = av_buffersink_get_sample_rate(sink);
+        ret = av_buffersink_get_ch_layout(sink, &ch_layout);
+        if (ret < 0)
+            goto fail;
+    }
+
+    /* prepare audio output */
+    if ((ret = audio_open(is, &ch_layout, sample_rate, &is->audio_tgt)) < 0)
+        goto fail;
+    is->audio_hw_buf_size = ret;
+    is->audio_src = is->audio_tgt;
+    is->audio_buf_size = 0;
+    is->audio_buf_index = 0;
+
+    /* init averaging filter */
+    is->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
+    is->audio_diff_avg_count = 0;
+    /* since we do not have a precise anough audio FIFO fullness,
+       we correct audio sync only if larger than this threshold */
+    is->audio_diff_threshold = (double)(is->audio_hw_buf_size) / is->audio_tgt.bytes_per_sec;
+
+    is->audio_stream = stream_index;
+    is->audio_st = ic->streams[stream_index];
+
+    if ((ret = decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread)) < 0)
+        goto fail;
+    if (is->ic->iformat->flags & AVFMT_NOTIMESTAMPS) {
+        is->auddec.start_pts = is->audio_st->start_time;
+        is->auddec.start_pts_tb = is->audio_st->time_base;
+    }
+    if ((ret = decoder_start(&is->auddec, audio_thread, "audio_decoder", is)) < 0)
+        goto out;
+    SDL_PauseAudioDevice(audio_dev, 0);
+    break;
+    case AVMEDIA_TYPE_VIDEO:
+        is->video_stream = stream_index;
+        is->video_st = ic->streams[stream_index];
+
+        if ((ret = decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread)) < 0)
+            goto fail;
+        if ((ret = decoder_start(&is->viddec, video_thread, "video_decoder", is)) < 0)
+            goto out;
+        is->queue_attachments_req = 1;
+        break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        is->subtitle_stream = stream_index;
+        is->subtitle_st = ic->streams[stream_index];
+
+        if ((ret = decoder_init(&is->subdec, avctx, &is->subtitleq, is->continue_read_thread)) < 0)
+            goto fail;
+        if ((ret = decoder_start(&is->subdec, subtitle_thread, "subtitle_decoder", is)) < 0)
+            goto out;
+        break;
+    default:
+        break;
+    }
+    goto out;
+
+fail:
+    avcodec_free_context(&avctx);
+out:
+    av_channel_layout_uninit(&ch_layout);
+    av_dict_free(&opts);
+
+    return ret;
+}
+
+/** 打开指定的流 */
+int FFFmpegMediaTracks::stream_component_open(int stream_index)
+{
+
+
+    ///以上新代码
     const auto Settings = GetDefault<UFFmpegMediaSettings>(); //获取播放器配置
 
     AVCodecContext* avctx; //codec上下文

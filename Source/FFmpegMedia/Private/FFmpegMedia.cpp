@@ -1,11 +1,12 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+#include "FFmpegMedia.h"
+#include "FFmpegMediaPlayer.h"
+
 #include "Modules/ModuleManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Templates/SharedPointer.h"
 
-#include "FFmpegMedia.h"
-#include "FFmpegMediaPlayer.h"
 extern  "C" {
 	#include "libavformat/avformat.h"
 }
