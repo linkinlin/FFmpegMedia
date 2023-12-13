@@ -4,6 +4,10 @@
 #include "FFmpeg/FFmpegDecoder.h"
 #include "LambdaFunctionRunnable.h"
 
+typedef struct FrameData {
+    int64_t pkt_pos;
+} FrameData;
+
 FFmpegDecoder::FFmpegDecoder()
 {
 }
@@ -164,7 +168,7 @@ void FFmpegDecoder::Abort(FFmpegFrameQueue* fq)
     this->queue->Abort();
     fq->Signal();
 
-    if (this->decoder_thread) {
+    if (this->decoder_tid) {
         this->decoder_thread->WaitForCompletion();
         this->decoder_thread = NULL;
     }
@@ -172,6 +176,138 @@ void FFmpegDecoder::Abort(FFmpegFrameQueue* fq)
 }
 
 void FFmpegDecoder::Destroy()
+{
+    av_packet_free(&this->pkt);
+    avcodec_free_context(&this->avctx);
+}
+
+int FFmpegDecoder::decoder_init(AVCodecContext* avctx_, FFmpegPacketQueue* queue_, FFmpegCond* empty_queue_cond_)
+{
+    this->pkt = av_packet_alloc();
+    if (!this->pkt)
+        return AVERROR(ENOMEM);
+    this->avctx = avctx_;
+    this->queue = queue_;
+    this->empty_queue_cond = empty_queue_cond_;
+    this->start_pts = AV_NOPTS_VALUE;
+    this->pkt_serial = -1;
+    return 0;
+}
+
+int FFmpegDecoder::decoder_decode_frame(AVFrame* frame_, AVSubtitle* sub_)
+{
+    int ret = AVERROR(EAGAIN);
+    for (;;) {
+        if (this->queue->serial == this->pkt_serial) {
+            do {
+                if (this->queue->abort_request)
+                    return -1;
+
+                switch (this->avctx->codec_type) {
+                case AVMEDIA_TYPE_VIDEO:
+                    ret = avcodec_receive_frame(this->avctx, frame_);
+                    if (ret >= 0) {
+                        if (this->decoder_reorder_pts == -1) {
+                            frame_->pts = frame_->best_effort_timestamp;
+                        }
+                        else if (!this->decoder_reorder_pts) {
+                            frame_->pts = frame_->pkt_dts;
+                        }
+                    }
+                    break;
+                case AVMEDIA_TYPE_AUDIO:
+                    ret = avcodec_receive_frame(this->avctx, frame_);
+                    if (ret >= 0) {
+                        AVRational tb = { 1, frame_->sample_rate };
+                        if (frame_->pts != AV_NOPTS_VALUE)
+                            frame_->pts = av_rescale_q(frame_->pts, this->avctx->pkt_timebase, tb);
+                        else if (this->next_pts != AV_NOPTS_VALUE)
+                            frame_->pts = av_rescale_q(this->next_pts, this->next_pts_tb, tb);
+                        if (frame_->pts != AV_NOPTS_VALUE) {
+                            this->next_pts = frame_->pts + frame_->nb_samples;
+                            this->next_pts_tb = tb;
+                        }
+                    }
+                    break;
+                }
+                if (ret == AVERROR_EOF) {
+                    this->finished = this->pkt_serial;
+                    avcodec_flush_buffers(this->avctx);
+                    return 0;
+                }
+                if (ret >= 0)
+                    return 1;
+            } while (ret != AVERROR(EAGAIN));
+        }
+
+        do {
+            if (this->queue->nb_packets == 0)
+                this->empty_queue_cond->Signal();
+            if (this->packet_pending) {
+                this->packet_pending = 0;
+            }
+            else {
+                int old_serial = this->pkt_serial;
+                if (this->queue->packet_queue_get(this->pkt, 1, &this->pkt_serial) < 0)
+                    return -1;
+                if (old_serial != this->pkt_serial) {
+                    avcodec_flush_buffers(this->avctx);
+                    this->finished = 0;
+                    this->next_pts = this->start_pts;
+                    this->next_pts_tb = this->start_pts_tb;
+                }
+            }
+            if (this->queue->serial == this->pkt_serial)
+                break;
+            av_packet_unref(this->pkt);
+        } while (1);
+
+        if (this->avctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+            int got_frame = 0;
+            ret = avcodec_decode_subtitle2(this->avctx, sub_, &got_frame, this->pkt);
+            if (ret < 0) {
+                ret = AVERROR(EAGAIN);
+            }
+            else {
+                if (got_frame && !this->pkt->data) {
+                    this->packet_pending = 1;
+                }
+                ret = got_frame ? 0 : (this->pkt->data ? AVERROR(EAGAIN) : AVERROR_EOF);
+            }
+            av_packet_unref(this->pkt);
+        }
+        else {
+            if (this->pkt->buf && !this->pkt->opaque_ref) {
+                FrameData* fd;
+
+                this->pkt->opaque_ref = av_buffer_allocz(sizeof(*fd));
+                if (!this->pkt->opaque_ref)
+                    return AVERROR(ENOMEM);
+                fd = (FrameData*)this->pkt->opaque_ref->data;
+                fd->pkt_pos = this->pkt->pos;
+            }
+
+            if (avcodec_send_packet(this->avctx, this->pkt) == AVERROR(EAGAIN)) {
+                av_log(this->avctx, AV_LOG_ERROR, "Receive_frame and send_packet both returned EAGAIN, which is an API violation.\n");
+                this->packet_pending = 1;
+            }
+            else {
+                av_packet_unref(this->pkt);
+            }
+        }
+    }
+}
+
+void FFmpegDecoder::decoder_abort(FFmpegFrameQueue* fq_)
+{
+    this->queue->packet_queue_abort();
+    fq_->frame_queue_signal();
+    this->decoder_tid->WaitForCompletion();
+    this->decoder_tid = NULL;
+    this->queue->packet_queue_flush();
+}
+
+void FFmpegDecoder::decoder_destroy()
 {
     av_packet_free(&this->pkt);
     avcodec_free_context(&this->avctx);

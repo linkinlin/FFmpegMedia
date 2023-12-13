@@ -16,28 +16,28 @@ public:
 	FFmpegClock();
 	~FFmpegClock();
 
-public:
-    double Get();
-    void SetAt(double pts, int serial, double time);
-    void Set(double pts, int serial);
-    void SetSpeed(double speed);
-    void Init(FFmpegPacketQueue* queue);
-    void Init(FFmpegClock* clock);
-    void SyncToSlave(FFmpegClock* slave);
-    int GetSerial();
-    double GetLastUpdated();
-    int GetPaused();
-    void SetPaused(int paused_);
-    double GetSpeed();
-    double GetPts();
+//public:
+//    double Get();
+//    void SetAt(double pts, int serial, double time);
+//    void Set(double pts, int serial);
+//    void SetSpeed(double speed);
+//    void Init(FFmpegPacketQueue* queue);
+//    void Init(FFmpegClock* clock);
+//    void SyncToSlave(FFmpegClock* slave);
+//    int GetSerial();
+//    double GetLastUpdated();
+//    int GetPaused();
+//    void SetPaused(int paused_);
+//    double GetSpeed();
+//    double GetPts();
 
 public:
     double get_clock();
     void set_clock_at(double pts, int serial, double time);
-    //void set_clock(double pts, int serial);
-   // void set_clock_speed(double speed);
-    //void init_clock(int* queue_serial);
-    //void sync_clock_to_slave(FFmpegClock* slave);
+    void set_clock(double pts, int serial);
+    void set_clock_speed(double speed);
+    void init_clock(int* queue_serial);
+    void sync_clock_to_slave(FFmpegClock* slave);
 
 public:
     double pts;           /* clock base 时间基准*/

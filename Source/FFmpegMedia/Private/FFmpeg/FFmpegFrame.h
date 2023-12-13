@@ -6,43 +6,49 @@ extern "C" {
 }
 #include "CoreMinimal.h"
 
+
 /**
  * 定义FFmpeg帧
  * 用于保存一帧视频画面、音频或者字幕
  */
 class FFmpegFrame
 {
+
 public:
 	FFmpegFrame();
 	~FFmpegFrame();
-public:
-    /** 初始化 */
-    int Init();
-    /** 获取Frame */
-    AVFrame* GetFrame();
-    int GetSerial();
-    int64_t GetPos();
-    double GetPts();
-    void SetPts(double pts_);
-    void SetPos(int64_t pos_);
-    void SetSerial(int serial_);
-    void SetDuration(double duration_);
-    double GetDuration();
-    void SetUploaded(int uploaded_);
-    int GetUploaded();
-    void SetSar(AVRational sar_);
 
-    void SetWidth(int width_);
-    void SetHeight(int height_);
-    void SetFormat(int format_);
 
-    AVSubtitle& GetSub();
+//public:
+//    /** 初始化 */
+//    int Init();
+//    /** 获取Frame */
+//    AVFrame* GetFrame();
+//    int GetSerial();
+//    int64_t GetPos();
+//    double GetPts();
+//    void SetPts(double pts_);
+//    void SetPos(int64_t pos_);
+//    void SetSerial(int serial_);
+//    void SetDuration(double duration_);
+//    double GetDuration();
+//    void SetUploaded(int uploaded_);
+//    int GetUploaded();
+//    void SetSar(AVRational sar_);
+//
+//    void SetWidth(int width_);
+//    void SetHeight(int height_);
+//    void SetFormat(int format_);
+//
+//    AVSubtitle& GetSub();
 
-public:
-    /**
-    * 替换static void frame_queue_unref_item(Frame* vp);
-    */
-    void UnrefItem();
+//public:
+//    /**
+//    * 替换static void frame_queue_unref_item(Frame* vp);
+//    */
+//    void UnrefItem();
+
+
 public:
     AVFrame* frame; //视频或音频的解码数据
     AVSubtitle sub; //字幕的解码数据
