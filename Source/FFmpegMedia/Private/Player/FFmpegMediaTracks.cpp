@@ -547,7 +547,7 @@ int FFFmpegMediaTracks::DisplayThread()
         //    continue;
         //}
 
-        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p:  DisplayThread remaining_time %f"), this, remaining_time);
+        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p:  DisplayThread remaining_time %f"), this, remaining_time);
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0)); //睡眠一段时间，防止无意义的频繁调用
         remaining_time = REFRESH_RATE; //默认屏幕刷新率控制，REFRESH_RATE = 10ms
@@ -2097,7 +2097,7 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
             vp = this->pictq.frame_queue_peek(); //当前帧(正要显示的)
 
             if (vp->serial != this->videoq.serial) { //丢弃无效的Frame
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame %d, %f"), this, vp->serial, vp->pts);
+                //UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: drop a video frame %d, %f"), this, vp->serial, vp->pts);
                 this->pictq.frame_queue_peek_next();
                 goto retry;
             }
