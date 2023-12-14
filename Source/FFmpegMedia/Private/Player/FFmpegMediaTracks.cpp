@@ -13,6 +13,10 @@
 #include "FFmpegMediaSettings.h"
 #include "MediaSamples.h"
 
+typedef struct FFrameData {
+    int64_t pkt_pos;
+} FFrameData;
+
  /* Minimum SDL audio buffer size, in samples. */
 #define AUDIO_MIN_BUFFER_SIZE 512
 /* Calculate actual buffer size keeping in mind not cause too frequent audio callbacks */
@@ -39,6 +43,8 @@
 #define AV_SYNC_FRAMEDUP_THRESHOLD 0.1
  /* maximum audio speed change to get correct sync */
 #define SAMPLE_CORRECTION_PERCENT_MAX 10
+
+#define SDL_AUDIO_MIN_BUFFER_SIZE 512
 
 
 #define LOCTEXT_NAMESPACE "FFmpegMediaTracks"
@@ -581,51 +587,89 @@ int FFFmpegMediaTracks::AudioRenderThread() {
 FTimespan FFFmpegMediaTracks::RenderAudio()
 {
     int audio_size, len1;
-
     this->audio_callback_time = av_gettime_relative();
+
     FTimespan time = 0; //帧显示时间，解码之后获取
     FTimespan duration = 0; //帧时长，解码之后获取
     audio_size = this->audio_decode_frame(time, duration);
     if (audio_size < 0) {
         /* if error, just output silence */
         this->audio_buf = NULL;
-        this->audio_buf_size = AUDIO_MIN_BUFFER_SIZE / this->audio_tgt.FrameSize * this->audio_tgt.FrameSize;
+        this->audio_buf_size = SDL_AUDIO_MIN_BUFFER_SIZE / this->audio_tgt.frame_size * this->audio_tgt.frame_size;
     }
     else {
         this->audio_buf_size = audio_size;
     }
+    this->audio_buf_index = 0; //每次索引从0开始即可
+    len1 = this->audio_buf_size; //每次长度都设置audio_buf_size的值即可
 
-    //this->audio_buf_index = 0;
-    len1 = this->audio_buf_size;// -this->audio_buf_index;
-
-    if (CurrentState == EMediaState::Paused || CurrentState == EMediaState::Stopped) {
-        //Ignore the frame
-        //audio_decode_frame 中
-    }
-    else {
-        if (this->audio_buf != NULL) {
-            FScopeLock Lock(&CriticalSection);
-            const TSharedRef<FFFmpegMediaAudioSample, ESPMode::ThreadSafe> AudioSample = AudioSamplePool->AcquireShared();
-            if (AudioSample->Initialize((uint8_t*)this->audio_buf, len1, audio_tgt.NumChannels, audio_tgt.SampleRate, time, duration))
-            {
-                //将样本对象放入样本队列中
-               /* if (AudioDropCounter.GetValue() != 0) {
-                    AudioDropCounter.Decrement();
-                    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks%p, AudioSample Drop %s, %d, Serial:%d"), this, *AudioSample.Get().GetTime().Time.ToString(), AudioDropCounter.GetValue(), this->videoq.GetSerial());
-                    return 0;
-                }*/
-                this->MediaSamples->AddAudio(AudioSample);
-                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
-            }
+    if (this->audio_buf != NULL) {
+        FScopeLock Lock(&CriticalSection);
+        const TSharedRef<FFFmpegMediaAudioSample, ESPMode::ThreadSafe> AudioSample = AudioSamplePool->AcquireShared();
+        if (AudioSample->Initialize((uint8_t*)this->audio_buf, len1, audio_tgt.ch_layout.nb_channels, audio_tgt.bytes_per_sec, time, duration))
+        {
+            this->MediaSamples->AddAudio(AudioSample);
+            UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
         }
     }
+
+    this->audio_write_buf_size = this->audio_buf_size - this->audio_buf_index;
     /* Let's assume the audio driver that is used by SDL has two periods. */
     if (!isnan(this->audio_clock)) {
-        this->audclk.set_clock_at(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_buf_size) / this->audio_tgt.BytesPerSec, this->audio_clock_serial, audio_callback_time / 1000000.0);
+        this->audclk.set_clock_at(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_write_buf_size) / this->audio_tgt.bytes_per_sec, this->audio_clock_serial, audio_callback_time / 1000000.0);
         this->extclk.sync_clock_to_slave(&this->audclk);
     }
-    return time;
 }
+
+///** 音频渲染 */
+//FTimespan FFFmpegMediaTracks::RenderAudio()
+//{
+//    int audio_size, len1;
+//
+//    this->audio_callback_time = av_gettime_relative();
+//    FTimespan time = 0; //帧显示时间，解码之后获取
+//    FTimespan duration = 0; //帧时长，解码之后获取
+//    audio_size = this->audio_decode_frame(time, duration);
+//    if (audio_size < 0) {
+//        /* if error, just output silence */
+//        this->audio_buf = NULL;
+//        this->audio_buf_size = AUDIO_MIN_BUFFER_SIZE / this->audio_tgt.FrameSize * this->audio_tgt.FrameSize;
+//    }
+//    else {
+//        this->audio_buf_size = audio_size;
+//    }
+//
+//    //this->audio_buf_index = 0;
+//    len1 = this->audio_buf_size;// -this->audio_buf_index;
+//
+//    if (CurrentState == EMediaState::Paused || CurrentState == EMediaState::Stopped) {
+//        //Ignore the frame
+//        //audio_decode_frame 中
+//    }
+//    else {
+//        if (this->audio_buf != NULL) {
+//            FScopeLock Lock(&CriticalSection);
+//            const TSharedRef<FFFmpegMediaAudioSample, ESPMode::ThreadSafe> AudioSample = AudioSamplePool->AcquireShared();
+//            if (AudioSample->Initialize((uint8_t*)this->audio_buf, len1, audio_tgt.NumChannels, audio_tgt.SampleRate, time, duration))
+//            {
+//                //将样本对象放入样本队列中
+//               /* if (AudioDropCounter.GetValue() != 0) {
+//                    AudioDropCounter.Decrement();
+//                    UE_LOG(LogFFmpegMedia, Log, TEXT("FFmpegMediaTracks%p, AudioSample Drop %s, %d, Serial:%d"), this, *AudioSample.Get().GetTime().Time.ToString(), AudioDropCounter.GetValue(), this->videoq.GetSerial());
+//                    return 0;
+//                }*/
+//                this->MediaSamples->AddAudio(AudioSample);
+//                UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p, AudioSample Enqueue %s"), this, *AudioSample.Get().GetTime().Time.ToString());
+//            }
+//        }
+//    }
+//    /* Let's assume the audio driver that is used by SDL has two periods. */
+//    if (!isnan(this->audio_clock)) {
+//        this->audclk.set_clock_at(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_buf_size) / this->audio_tgt.BytesPerSec, this->audio_clock_serial, audio_callback_time / 1000000.0);
+//        this->extclk.sync_clock_to_slave(&this->audclk);
+//    }
+//    return time;
+//}
 
 /** 清除标记 */
 void FFFmpegMediaTracks::ClearFlags()
@@ -1026,16 +1070,16 @@ bool FFFmpegMediaTracks::SelectTrack(EMediaTrackType TrackType, int32 TrackIndex
         } else if (TrackType == EMediaTrackType::Audio) {
             //在此处设置源音频格式和目标格式
             //添加轨道式AV_SAMPLE_FMT_S16已经固定了
-            this->audio_src = (*Tracks)[TrackIndex].Format.Audio;  //音频源配置
-            this->audio_tgt = audio_src;                           //音频目标配置 
-            this->audio_hw_buf_size = this->audio_src.HardwareSize;//音频缓存区大小
-            this->audio_buf_size = 0;                              //音频缓存大小
+            //this->audio_src = (*Tracks)[TrackIndex].Format.Audio;  //音频源配置
+            //this->audio_tgt = audio_src;                           //音频目标配置 
+            //this->audio_hw_buf_size = this->audio_src.bytes_per_sec;//音频缓存区大小
+           // this->audio_buf_size = 0;                              //音频缓存大小
             /* init averaging filter */
-            this->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
-            this->audio_diff_avg_count = 0;
+            //this->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
+            //this->audio_diff_avg_count = 0;
             /* since we do not have a precise anough audio FIFO fullness,
                we correct audio sync only if larger than this threshold */
-            this->audio_diff_threshold = (double)(this->audio_tgt.HardwareSize) / this->audio_tgt.BytesPerSec;
+            //this->audio_diff_threshold = (double)(this->audio_tgt.HardwareSize) / this->audio_tgt.BytesPerSec;
 
             if (!audioRunning) {
                 audioRunning = true;
@@ -1448,6 +1492,34 @@ void FFFmpegMediaTracks::stream_seek(int64_t pos, int64_t rel, int by_bytes)
     }
 }
 
+int FFFmpegMediaTracks::create_hwaccel(AVBufferRef** device_ctx)
+{
+    enum AVHWDeviceType type;
+    int ret;
+    const char* hwaccel = "cuda"; //todo: 做成setting, hw_type_names
+    AVBufferRef* vk_dev = nullptr;
+
+    *device_ctx = NULL;
+
+    if (!hwaccel)
+        return 0;
+
+    type = av_hwdevice_find_type_by_name(hwaccel);
+    if (type == AV_HWDEVICE_TYPE_NONE)
+        return AVERROR(ENOTSUP);
+
+    ret = av_hwdevice_ctx_create_derived(device_ctx, type, vk_dev, 0);
+    if (!ret)
+        return 0;
+
+    if (ret != AVERROR(ENOSYS))
+        return ret;
+
+    UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: Derive %s from vulkan not supported."), this, hwaccel);
+    ret = av_hwdevice_ctx_create(device_ctx, type, NULL, NULL, 0);
+    return ret;
+}
+
 /** 打开指定的流 */
 int FFFmpegMediaTracks::stream_component_open(int stream_index)
 {
@@ -1463,7 +1535,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     int stream_lowres = lowres;
     int fast = 0; //todo默认为0 做成setting
 
-    if (stream_index < 0 || stream_index >= ic->nb_streams)
+    if (stream_index < 0 || stream_index >= (int)ic->nb_streams)
         return -1;
 
     avctx = avcodec_alloc_context3(nullptr);
@@ -1498,10 +1570,6 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     if (fast)
         avctx->flags2 |= AV_CODEC_FLAG2_FAST; //非标准化规范的多媒体兼容优化
 
-    ret = filter_codec_opts(codec_opts, avctx->codec_id, ic, ic->streams[stream_index], codec, &opts);
-    if (ret < 0)
-        goto fail;
-
     if (!av_dict_get(opts, "threads", NULL, 0))
         av_dict_set(&opts, "threads", "auto", 0);
     if (stream_lowres)
@@ -1518,189 +1586,9 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) {
         goto fail;
     }
-    if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
-        av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
-        ret = AVERROR_OPTION_NOT_FOUND;
-        goto fail;
-    }
-
-    is->eof = 0;
-    ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
-    switch (avctx->codec_type) {
-    case AVMEDIA_TYPE_AUDIO:
-    {
-        AVFilterContext* sink;
-
-        is->audio_filter_src.freq = avctx->sample_rate;
-        ret = av_channel_layout_copy(&is->audio_filter_src.ch_layout, &avctx->ch_layout);
-        if (ret < 0)
-            goto fail;
-        is->audio_filter_src.fmt = avctx->sample_fmt;
-        if ((ret = configure_audio_filters(is, afilters, 0)) < 0)
-            goto fail;
-        sink = is->out_audio_filter;
-        sample_rate = av_buffersink_get_sample_rate(sink);
-        ret = av_buffersink_get_ch_layout(sink, &ch_layout);
-        if (ret < 0)
-            goto fail;
-    }
-
-    /* prepare audio output */
-    if ((ret = audio_open(is, &ch_layout, sample_rate, &is->audio_tgt)) < 0)
-        goto fail;
-    is->audio_hw_buf_size = ret;
-    is->audio_src = is->audio_tgt;
-    is->audio_buf_size = 0;
-    is->audio_buf_index = 0;
-
-    /* init averaging filter */
-    is->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
-    is->audio_diff_avg_count = 0;
-    /* since we do not have a precise anough audio FIFO fullness,
-       we correct audio sync only if larger than this threshold */
-    is->audio_diff_threshold = (double)(is->audio_hw_buf_size) / is->audio_tgt.bytes_per_sec;
-
-    is->audio_stream = stream_index;
-    is->audio_st = ic->streams[stream_index];
-
-    if ((ret = decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread)) < 0)
-        goto fail;
-    if (is->ic->iformat->flags & AVFMT_NOTIMESTAMPS) {
-        is->auddec.start_pts = is->audio_st->start_time;
-        is->auddec.start_pts_tb = is->audio_st->time_base;
-    }
-    if ((ret = decoder_start(&is->auddec, audio_thread, "audio_decoder", is)) < 0)
-        goto out;
-    SDL_PauseAudioDevice(audio_dev, 0);
-    break;
-    case AVMEDIA_TYPE_VIDEO:
-        is->video_stream = stream_index;
-        is->video_st = ic->streams[stream_index];
-
-        if ((ret = decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread)) < 0)
-            goto fail;
-        if ((ret = decoder_start(&is->viddec, video_thread, "video_decoder", is)) < 0)
-            goto out;
-        is->queue_attachments_req = 1;
-        break;
-    case AVMEDIA_TYPE_SUBTITLE:
-        is->subtitle_stream = stream_index;
-        is->subtitle_st = ic->streams[stream_index];
-
-        if ((ret = decoder_init(&is->subdec, avctx, &is->subtitleq, is->continue_read_thread)) < 0)
-            goto fail;
-        if ((ret = decoder_start(&is->subdec, subtitle_thread, "subtitle_decoder", is)) < 0)
-            goto out;
-        break;
-    default:
-        break;
-    }
-    goto out;
-
-fail:
-    avcodec_free_context(&avctx);
-out:
-    av_channel_layout_uninit(&ch_layout);
-    av_dict_free(&opts);
-
-    return ret;
-}
-
-/** 打开指定的流 */
-int FFFmpegMediaTracks::stream_component_open(int stream_index)
-{
-
-
-    ///以上新代码
-    const auto Settings = GetDefault<UFFmpegMediaSettings>(); //获取播放器配置
-
-    AVCodecContext* avctx; //codec上下文
-    const AVCodec* codec; //codec(解码器)
-    const AVDictionaryEntry* t = NULL; //键值对
-    int sample_rate; //采样率
-    AVChannelLayout ch_layout{}; //音频通道格式类型, av_channel_layout_default();
-    int ret = 0;
-    int lowres = 0; //todo 低分辨率，默认为0
-    int stream_lowres = lowres;
-    AVDictionary* opts = {};
-
-    if (stream_index < 0 || stream_index >= (int)ic->nb_streams) //如果流索引小于0或者超过总数量，返回-1
-        return -1;
-
-    avctx = avcodec_alloc_context3(NULL); //分配codec上下文对象
-    if (!avctx) {
-        UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p: avcodec_alloc_context3 fail"), this);
-        return AVERROR(ENOMEM);
-    }
-
-    ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar); //从流中拷贝信息到codec上下文中
-    if (ret < 0)
-        goto fail;
-    avctx->pkt_timebase = ic->streams[stream_index]->time_base;
-
-    codec = avcodec_find_decoder(avctx->codec_id); //查找codec
-    //此处删除了ffplay中强制指定编码器的相关代码
-    if (!codec) {
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: No decoder could be found for codec %s"), this, avcodec_get_name(avctx->codec_id));
-        ret = AVERROR(EINVAL);
-        goto fail;
-    }
-
-    /**硬件编码处理开始 */
-    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO && Settings->UseHardwareAcceleratedCodecs) { //如果启用了硬件编码且是视频流
-        avCodecHWConfig = this->FindBestDeviceType(codec);
-        if (avCodecHWConfig != nullptr) {
-            // 硬件解码器初始化
-            AVBufferRef* hw_device_ctx = nullptr;
-            ret = av_hwdevice_ctx_create(&hw_device_ctx, avCodecHWConfig->device_type, nullptr, nullptr, 0);
-            if (ret >= 0) {
-                avctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-                avctx->opaque = this;
-                avctx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) -> AVPixelFormat { //获取硬件编码格式(Lambda)
-                    FFFmpegMediaTracks* tracks = (FFFmpegMediaTracks*)ctx->opaque;
-                    const enum AVPixelFormat* p;
-
-                    for (p = pix_fmts; *p != -1; p++) {
-                        if (*p == tracks->avCodecHWConfig->pix_fmt)
-                            return *p;
-                    }
-
-                    UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Failed to get HW surface format"));
-                    return AV_PIX_FMT_NONE;
-                };
-                //todo: 已经废弃了  avctx->thread_safe_callbacks = 1;
-                UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Hw enable success"), this);
-            }
-            else {
-                UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: Hw enable fail"), this);
-                avCodecHWConfig = nullptr;
-                hw_device_ctx = nullptr;
-            }
-        }
-    }
-    /**硬件编码处理结束 */
-
-    avctx->codec_id = codec->id;
-    if (stream_lowres > codec->max_lowres) { //低分辨率不能超过codec的编码器
-        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: The maximum value for lowres supported by the decoder is %d"), this, codec->max_lowres);
-        stream_lowres = codec->max_lowres;
-    }
-    avctx->lowres = stream_lowres;
-
-    if (Settings->AllowFast)//非标准化规范的多媒体兼容优化
-        avctx->flags2 |= AV_CODEC_FLAG2_FAST;
-
-    if (!av_dict_get(opts, "threads", NULL, 0))
-        av_dict_set(&opts, "threads", "auto", 0);
-    if (stream_lowres)
-        av_dict_set_int(&opts, "lowres", stream_lowres, 0);
-    if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) { //打开codec
-        goto fail;
-    }
-    t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX);
+    t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX)
     if (t) {
-        //av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Option %s not found"), this, t->key);
+        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Option %s not found."), this, t->key);
         ret = AVERROR_OPTION_NOT_FOUND;
         goto fail;
     }
@@ -1709,63 +1597,56 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
     switch (avctx->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[audio] %i"), this, stream_index);
         sample_rate = avctx->sample_rate; //设置音频采样率
         ret = av_channel_layout_copy(&ch_layout, &avctx->ch_layout); //拷贝音频编码格式
         if (ret < 0)
             goto fail;
-        //其他变量初始化移动到SelectTrack中
+
+        this->audio_hw_buf_size = ret;
+        this->audio_src = this->audio_tgt;
+        this->audio_buf_size = 0;
+        this->audio_buf_index = 0;
+
+        /* init averaging filter */
+        this->audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB);
+        this->audio_diff_avg_count = 0;
+        /* since we do not have a precise anough audio FIFO fullness,
+           we correct audio sync only if larger than this threshold */
+        this->audio_diff_threshold = (double)(this->audio_hw_buf_size) / this->audio_tgt.bytes_per_sec;
+
         this->audio_stream = stream_index;
         this->audio_st = ic->streams[stream_index];
 
-        //初始化音频解码器
-        ret = this->auddec->decoder_init(avctx, &this->audioq, this->continue_read_thread);
-        if (ret < 0)
+        if ((ret = this->auddec->decoder_init(avctx, &this->audioq, this->continue_read_thread)) < 0)
             goto fail;
-        if ((this->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !this->ic->iformat->read_seek) {
-            
+        if (this->ic->iformat->flags & AVFMT_NOTIMESTAMPS) {
             this->auddec->start_pts = this->audio_st->start_time;
             this->auddec->start_pts_tb = this->audio_st->time_base;
         }
-        //启用音频线程
-        if ((ret = auddec->decoder_start(TEXT("AudioThread"), [this] { audio_thread();})) < 0) {
-            av_dict_free(&opts);
-            return ret;
-        }
-      /*  if ((ret = auddec->Start([this](void* data) {return audio_thread();}, NULL)) < 0) {
-            av_dict_free(&opts);
-            return ret;
-        }*/
+        if ((ret = this->auddec->decoder_start(TEXT("audio_thread"), [this] { audio_thread();})) < 0)
+            goto out;
         UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p: start a audio_thread"), this);
-        break;
+    break;
     case AVMEDIA_TYPE_VIDEO:
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[video] %i"), this, stream_index);
-        this->video_avctx = avctx;
         this->video_stream = stream_index;
         this->video_st = ic->streams[stream_index];
-        ret = this->viddec->decoder_init(avctx, &this->videoq, this->continue_read_thread);
-        if (ret < 0)
+
+        if ((ret = this->viddec->decoder_init(avctx, &this->videoq, this->continue_read_thread)) < 0)
             goto fail;
-        //启用视频线程
-        if ((ret = viddec->decoder_start(TEXT("VideoThread"), [this] { video_thread();})) < 0) {
+        if ((ret = this->viddec->decoder_start(TEXT("video_thread"), [this] { video_thread(); })) < 0)
             goto out;
-        }
-      /*  if ((ret = viddec->Start([this](void* data) {return video_thread();}, NULL)) < 0) {
-            goto out;
-        }*/
         this->queue_attachments_req = 1;
+        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p: start a video_thread"), this);
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[subtitle] %i"), this, stream_index);
         this->subtitle_stream = stream_index;
         this->subtitle_st = ic->streams[stream_index];
-        ret = this->subdec->decoder_init(avctx, &this->subtitleq, this->continue_read_thread);
-        if (ret < 0)
+
+        if ((ret = this->subdec->decoder_init(avctx, &this->subtitleq, this->continue_read_thread)) < 0)
             goto fail;
-        //启用字幕线程
-        if ((ret = subdec->decoder_start(TEXT("SubtitleThread"), [this] { subtitle_thread();})) < 0) {
+        if ((ret = this->subdec->decoder_start(TEXT("subtitle_thread"), [this] { subtitle_thread(); })) < 0)
             goto out;
-        }
+        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p: start a subtitle_thread"), this);
         break;
     default:
         break;
@@ -1777,35 +1658,209 @@ fail:
 out:
     av_channel_layout_uninit(&ch_layout);
     av_dict_free(&opts);
+
     return ret;
 }
 
+///** 打开指定的流 */
+//int FFFmpegMediaTracks::stream_component_open(int stream_index)
+//{
+//
+//
+//    ///以上新代码
+//    const auto Settings = GetDefault<UFFmpegMediaSettings>(); //获取播放器配置
+//
+//    AVCodecContext* avctx; //codec上下文
+//    const AVCodec* codec; //codec(解码器)
+//    const AVDictionaryEntry* t = NULL; //键值对
+//    int sample_rate; //采样率
+//    AVChannelLayout ch_layout{}; //音频通道格式类型, av_channel_layout_default();
+//    int ret = 0;
+//    int lowres = 0; //todo 低分辨率，默认为0
+//    int stream_lowres = lowres;
+//    AVDictionary* opts = {};
+//
+//    if (stream_index < 0 || stream_index >= (int)ic->nb_streams) //如果流索引小于0或者超过总数量，返回-1
+//        return -1;
+//
+//    avctx = avcodec_alloc_context3(NULL); //分配codec上下文对象
+//    if (!avctx) {
+//        UE_LOG(LogFFmpegMedia, VeryVerbose, TEXT("Tracks: %p: avcodec_alloc_context3 fail"), this);
+//        return AVERROR(ENOMEM);
+//    }
+//
+//    ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar); //从流中拷贝信息到codec上下文中
+//    if (ret < 0)
+//        goto fail;
+//    avctx->pkt_timebase = ic->streams[stream_index]->time_base;
+//
+//    codec = avcodec_find_decoder(avctx->codec_id); //查找codec
+//    //此处删除了ffplay中强制指定编码器的相关代码
+//    if (!codec) {
+//        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: No decoder could be found for codec %s"), this, avcodec_get_name(avctx->codec_id));
+//        ret = AVERROR(EINVAL);
+//        goto fail;
+//    }
+//
+//    /**硬件编码处理开始 */
+//    if (avctx->codec_type == AVMEDIA_TYPE_VIDEO && Settings->UseHardwareAcceleratedCodecs) { //如果启用了硬件编码且是视频流
+//        avCodecHWConfig = this->FindBestDeviceType(codec);
+//        if (avCodecHWConfig != nullptr) {
+//            // 硬件解码器初始化
+//            AVBufferRef* hw_device_ctx = nullptr;
+//            ret = av_hwdevice_ctx_create(&hw_device_ctx, avCodecHWConfig->device_type, nullptr, nullptr, 0);
+//            if (ret >= 0) {
+//                avctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+//                avctx->opaque = this;
+//                avctx->get_format = [](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) -> AVPixelFormat { //获取硬件编码格式(Lambda)
+//                    FFFmpegMediaTracks* tracks = (FFFmpegMediaTracks*)ctx->opaque;
+//                    const enum AVPixelFormat* p;
+//
+//                    for (p = pix_fmts; *p != -1; p++) {
+//                        if (*p == tracks->avCodecHWConfig->pix_fmt)
+//                            return *p;
+//                    }
+//
+//                    UE_LOG(LogFFmpegMedia, Error, TEXT("Player %p: Failed to get HW surface format"));
+//                    return AV_PIX_FMT_NONE;
+//                };
+//                //todo: 已经废弃了  avctx->thread_safe_callbacks = 1;
+//                UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Hw enable success"), this);
+//            }
+//            else {
+//                UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: Hw enable fail"), this);
+//                avCodecHWConfig = nullptr;
+//                hw_device_ctx = nullptr;
+//            }
+//        }
+//    }
+//    /**硬件编码处理结束 */
+//
+//    avctx->codec_id = codec->id;
+//    if (stream_lowres > codec->max_lowres) { //低分辨率不能超过codec的编码器
+//        UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: The maximum value for lowres supported by the decoder is %d"), this, codec->max_lowres);
+//        stream_lowres = codec->max_lowres;
+//    }
+//    avctx->lowres = stream_lowres;
+//
+//    if (Settings->AllowFast)//非标准化规范的多媒体兼容优化
+//        avctx->flags2 |= AV_CODEC_FLAG2_FAST;
+//
+//    if (!av_dict_get(opts, "threads", NULL, 0))
+//        av_dict_set(&opts, "threads", "auto", 0);
+//    if (stream_lowres)
+//        av_dict_set_int(&opts, "lowres", stream_lowres, 0);
+//    if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) { //打开codec
+//        goto fail;
+//    }
+//    t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX);
+//    if (t) {
+//        //av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
+//        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Option %s not found"), this, t->key);
+//        ret = AVERROR_OPTION_NOT_FOUND;
+//        goto fail;
+//    }
+//
+//    this->eof = 0;
+//    ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
+//    switch (avctx->codec_type) {
+//    case AVMEDIA_TYPE_AUDIO:
+//        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[audio] %i"), this, stream_index);
+//        sample_rate = avctx->sample_rate; //设置音频采样率
+//        ret = av_channel_layout_copy(&ch_layout, &avctx->ch_layout); //拷贝音频编码格式
+//        if (ret < 0)
+//            goto fail;
+//        //其他变量初始化移动到SelectTrack中
+//        this->audio_stream = stream_index;
+//        this->audio_st = ic->streams[stream_index];
+//
+//        //初始化音频解码器
+//        ret = this->auddec->decoder_init(avctx, &this->audioq, this->continue_read_thread);
+//        if (ret < 0)
+//            goto fail;
+//        if ((this->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !this->ic->iformat->read_seek) {
+//            
+//            this->auddec->start_pts = this->audio_st->start_time;
+//            this->auddec->start_pts_tb = this->audio_st->time_base;
+//        }
+//        //启用音频线程
+//        if ((ret = auddec->decoder_start(TEXT("AudioThread"), [this] { audio_thread();})) < 0) {
+//            av_dict_free(&opts);
+//            return ret;
+//        }
+//      /*  if ((ret = auddec->Start([this](void* data) {return audio_thread();}, NULL)) < 0) {
+//            av_dict_free(&opts);
+//            return ret;
+//        }*/
+//        UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks: %p: start a audio_thread"), this);
+//        break;
+//    case AVMEDIA_TYPE_VIDEO:
+//        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[video] %i"), this, stream_index);
+//        this->video_avctx = avctx;
+//        this->video_stream = stream_index;
+//        this->video_st = ic->streams[stream_index];
+//        ret = this->viddec->decoder_init(avctx, &this->videoq, this->continue_read_thread);
+//        if (ret < 0)
+//            goto fail;
+//        //启用视频线程
+//        if ((ret = viddec->decoder_start(TEXT("VideoThread"), [this] { video_thread();})) < 0) {
+//            goto out;
+//        }
+//      /*  if ((ret = viddec->Start([this](void* data) {return video_thread();}, NULL)) < 0) {
+//            goto out;
+//        }*/
+//        this->queue_attachments_req = 1;
+//        break;
+//    case AVMEDIA_TYPE_SUBTITLE:
+//        UE_LOG(LogFFmpegMedia, Verbose, TEXT("Tracks %p: Enabled stream[subtitle] %i"), this, stream_index);
+//        this->subtitle_stream = stream_index;
+//        this->subtitle_st = ic->streams[stream_index];
+//        ret = this->subdec->decoder_init(avctx, &this->subtitleq, this->continue_read_thread);
+//        if (ret < 0)
+//            goto fail;
+//        //启用字幕线程
+//        if ((ret = subdec->decoder_start(TEXT("SubtitleThread"), [this] { subtitle_thread();})) < 0) {
+//            goto out;
+//        }
+//        break;
+//    default:
+//        break;
+//    }
+//    goto out;
+//
+//fail:
+//    avcodec_free_context(&avctx);
+//out:
+//    av_channel_layout_uninit(&ch_layout);
+//    av_dict_free(&opts);
+//    return ret;
+//}
+
 /** 关闭指定的流 */
+
 void FFFmpegMediaTracks::stream_component_close(int stream_index)
 {
+    //AVFormatContext* ic = is->ic;
     AVCodecParameters* codecpar;
-    int nb_streams = (int)this->ic->nb_streams;
-    if (stream_index < 0 || stream_index >= nb_streams)
+
+    if (stream_index < 0 || stream_index >= (int)ic->nb_streams)
         return;
-    codecpar = this->ic->streams[stream_index]->codecpar;
+    codecpar = ic->streams[stream_index]->codecpar;
 
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         this->auddec->decoder_abort(&this->sampq);
         this->auddec->decoder_destroy();
-        if (this->swr_ctx) {
-            swr_free(&this->swr_ctx);
-        }
-        if (this->audio_buf1) {
-            av_freep(&this->audio_buf1);
-        }
+        swr_free(&this->swr_ctx);
+        av_freep(&this->audio_buf1);
         this->audio_buf1_size = 0;
-        this->audio_buf = NULL;
+        this->audio_buf = nullptr;
 
-        if (this->rdft != NULL) {
-            av_rdft_end(this->rdft);
+        if (this->rdft) {
+           // av_tx_uninit(&this->rdft); todo
+            av_freep(&this->real_data);
             av_freep(&this->rdft_data);
-            this->rdft = NULL;
+            this->rdft = nullptr;
             this->rdft_bits = 0;
         }
         break;
@@ -1840,59 +1895,176 @@ void FFFmpegMediaTracks::stream_component_close(int stream_index)
     }
 }
 
-/**音频解码线程 */
-int FFFmpegMediaTracks::audio_thread()
-{
-    AVFrame* frame = av_frame_alloc(); //分配帧对象
+//void av_tx_uninit(AVTXContext** ctx)
+//{
+//    if (!(*ctx))
+//        return;
+//
+//    reset_ctx(*ctx, 1);
+//    av_freep(ctx);
+//}
+
+//void FFFmpegMediaTracks::stream_component_close(int stream_index)
+//{
+//    AVCodecParameters* codecpar;
+//    int nb_streams = (int)this->ic->nb_streams;
+//    if (stream_index < 0 || stream_index >= nb_streams)
+//        return;
+//    codecpar = this->ic->streams[stream_index]->codecpar;
+//
+//    switch (codecpar->codec_type) {
+//    case AVMEDIA_TYPE_AUDIO:
+//        this->auddec->decoder_abort(&this->sampq);
+//        this->auddec->decoder_destroy();
+//        if (this->swr_ctx) {
+//            swr_free(&this->swr_ctx);
+//        }
+//        if (this->audio_buf1) {
+//            av_freep(&this->audio_buf1);
+//        }
+//        this->audio_buf1_size = 0;
+//        this->audio_buf = NULL;
+//
+//        if (this->rdft != NULL) {
+//            av_rdft_end(this->rdft);
+//            av_freep(&this->rdft_data);
+//            this->rdft = NULL;
+//            this->rdft_bits = 0;
+//        }
+//        break;
+//    case AVMEDIA_TYPE_VIDEO:
+//        this->viddec->decoder_abort(&this->pictq);
+//        this->viddec->decoder_destroy();
+//        break;
+//    case AVMEDIA_TYPE_SUBTITLE:
+//        this->subdec->decoder_abort(&this->subpq);
+//        this->subdec->decoder_destroy();
+//        break;
+//    default:
+//        break;
+//    }
+//
+//    ic->streams[stream_index]->discard = AVDISCARD_ALL;
+//    switch (codecpar->codec_type) {
+//    case AVMEDIA_TYPE_AUDIO:
+//        this->audio_st = NULL;
+//        this->audio_stream = -1;
+//        break;
+//    case AVMEDIA_TYPE_VIDEO:
+//        this->video_st = NULL;
+//        this->video_stream = -1;
+//        break;
+//    case AVMEDIA_TYPE_SUBTITLE:
+//        this->subtitle_st = NULL;
+//        this->subtitle_stream = -1;
+//        break;
+//    default:
+//        break;
+//    }
+//}
+int FFFmpegMediaTracks::audio_thread() {
+    AVFrame* frame = av_frame_alloc();
     FFmpegFrame* af;
+    int last_serial = -1;
+    int reconfigure;
     int got_frame = 0;
     AVRational tb;
     int ret = 0;
 
-    if (!frame) {
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because alloc frame fail"), this);
+    if (!frame)
         return AVERROR(ENOMEM);
-    }
 
     do {
-        got_frame = this->auddec->decoder_decode_frame(frame, NULL); //解码帧
-        if (got_frame < 0) {
-            av_frame_free(&frame);
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because decode frame fail"), this);
-            return ret;
-        }
+        if ((got_frame = this->auddec->decoder_decode_frame(frame, NULL)) < 0)
+            goto the_end;
+
         if (got_frame) {
             tb = { 1, frame->sample_rate };
-            af = this->sampq.frame_queue_peek_writable();
-            if (!af) {
-                av_frame_free(&frame);
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because peek a writable frame fail"), this);
-                return ret;
-            }
-            af->pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
-            af->pos = frame->pkt_pos;
-            af->serial = this->auddec->pkt_serial;
-            af->duration = av_q2d({ frame->nb_samples, frame->sample_rate });
 
-            //精准seek控制
-            if (this->accurate_audio_seek_flag) {
-                if (af->pts < this->accurate_seek_time) {
-                    av_frame_move_ref(af->frame, frame);
-                    continue;
-                }
-                else {
-                    this->accurate_audio_seek_flag = 0;
-                }
+            reconfigure = this->auddec->pkt_serial != last_serial;
+
+            if (reconfigure) {
+                last_serial = this->auddec->pkt_serial;
             }
-            av_frame_move_ref(af->frame, frame);
-            this->sampq.frame_queue_push();
+
+            while (true) { //todo: 注意处理
+                FFrameData* fd = frame->opaque_ref ? (FFrameData*)frame->opaque_ref->data : NULL;
+                af = this->sampq.frame_queue_peek_writable()
+                if (!af)
+                    goto the_end;
+
+                af->pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+                af->pos = fd ? fd->pkt_pos : -1;
+                af->serial = this->auddec->pkt_serial;
+                af->duration = av_q2d({ frame->nb_samples, frame->sample_rate });
+
+                av_frame_move_ref(af->frame, frame);
+                this->sampq.frame_queue_push();
+
+                if (this->audioq.serial != this->auddec->pkt_serial)
+                    break;
+            }
+            if (ret == AVERROR_EOF)
+                this->auddec->finished = this->auddec->pkt_serial;
         }
     } while (ret >= 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF);
-
+the_end:
     av_frame_free(&frame);
-    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: AudioThread exit"), this);
     return ret;
 }
+///**音频解码线程 */
+//int FFFmpegMediaTracks::audio_thread()
+//{
+//    AVFrame* frame = av_frame_alloc(); //分配帧对象
+//    FFmpegFrame* af;
+//    int got_frame = 0;
+//    AVRational tb;
+//    int ret = 0;
+//
+//    if (!frame) {
+//        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because alloc frame fail"), this);
+//        return AVERROR(ENOMEM);
+//    }
+//
+//    do {
+//        got_frame = this->auddec->decoder_decode_frame(frame, NULL); //解码帧
+//        if (got_frame < 0) {
+//            av_frame_free(&frame);
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because decode frame fail"), this);
+//            return ret;
+//        }
+//        if (got_frame) {
+//            tb = { 1, frame->sample_rate };
+//            af = this->sampq.frame_queue_peek_writable();
+//            if (!af) {
+//                av_frame_free(&frame);
+//                UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: AudioThread exit because peek a writable frame fail"), this);
+//                return ret;
+//            }
+//            af->pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+//            af->pos = frame->pkt_pos;
+//            af->serial = this->auddec->pkt_serial;
+//            af->duration = av_q2d({ frame->nb_samples, frame->sample_rate });
+//
+//            //精准seek控制
+//            if (this->accurate_audio_seek_flag) {
+//                if (af->pts < this->accurate_seek_time) {
+//                    av_frame_move_ref(af->frame, frame);
+//                    continue;
+//                }
+//                else {
+//                    this->accurate_audio_seek_flag = 0;
+//                }
+//            }
+//            av_frame_move_ref(af->frame, frame);
+//            this->sampq.frame_queue_push();
+//        }
+//    } while (ret >= 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF);
+//
+//    av_frame_free(&frame);
+//    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: AudioThread exit"), this);
+//    return ret;
+//}
 
 /**视频解码线程 */
 int FFFmpegMediaTracks::video_thread()
@@ -1903,50 +2075,118 @@ int FFFmpegMediaTracks::video_thread()
     int ret;
     AVRational tb = this->video_st->time_base;
     AVRational frame_rate = av_guess_frame_rate(this->ic, this->video_st, NULL);
-    
-    if (!frame) {
-        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because alloc frame fail"), this);
+
+    int last_w = 0;
+    int last_h = 0;
+    enum AVPixelFormat last_format = AVPixelFormat(-2);
+    int last_serial = -1;
+    int last_vfilter_idx = 0;
+
+    if (!frame)
         return AVERROR(ENOMEM);
-    }
 
     for (;;) {
         ret = this->get_video_frame(frame);
-        if (ret < 0) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because decode frame fail"), this);
-            av_frame_free(&frame);
-            return 0;
-        }
+        if (ret < 0)
+            goto the_end;
         if (!ret)
             continue;
 
-        duration = (frame_rate.num && frame_rate.den ? av_q2d({ frame_rate.den, frame_rate.num }) : 0);
-        pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
-
-        //精准seek控制
-        if (this->accurate_video_seek_flag) {
-            if (pts < this->accurate_seek_time) {
-                av_frame_unref(frame);
-                continue;
-            }
-            else {
-                this->accurate_video_seek_flag = 0;
-            }
+        if (last_w != frame->width
+            || last_h != frame->height
+            || last_format != frame->format
+            || last_serial != this->viddec->pkt_serial) {
+           /* av_log(NULL, AV_LOG_DEBUG,
+                "Video frame changed from size:%dx%d format:%s serial:%d to size:%dx%d format:%s serial:%d\n",
+                last_w, last_h,
+                (const char*)av_x_if_null(av_get_pix_fmt_name(last_format), "none"), last_serial,
+                frame->width, frame->height,
+                (const char*)av_x_if_null(av_get_pix_fmt_name(frame->format), "none"), is->viddec.pkt_serial);*/
+            last_w = frame->width;
+            last_h = frame->height;
+            last_format = AVPixelFormat(frame->format);
+            last_serial = this->viddec->pkt_serial;
+            //frame_rate = frame->sample_rate;
         }
 
+        while (ret >= 0) {
+            FFrameData* fd;
 
-        ret = queue_picture(frame, pts, duration, frame->pkt_pos, this->viddec->pkt_serial);
-        av_frame_unref(frame);
-        if (ret < 0) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because picture queue fail"), this);
-            av_frame_free(&frame);
-            return 0;
+            this->frame_last_returned_time = av_gettime_relative() / 1000000.0;
+
+            fd = frame->opaque_ref ? (FFrameData*)frame->opaque_ref->data : NULL;
+            this->frame_last_filter_delay = av_gettime_relative() / 1000000.0 - this->frame_last_returned_time;
+            if (fabs(this->frame_last_filter_delay) > AV_NOSYNC_THRESHOLD / 10.0)
+                this->frame_last_filter_delay = 0;
+            duration = (frame_rate.num && frame_rate.den ? av_q2d({ frame_rate.den, frame_rate.num }) : 0);
+            pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+            ret = this->queue_picture(frame, pts, duration, fd ? fd->pkt_pos : -1, this->viddec->pkt_serial); //将解码后的视频帧放入队列
+            av_frame_unref(frame);
+            if (this->videoq.serial != this->viddec->pkt_serial)
+                break;
         }
+
+        if (ret < 0)
+            goto the_end;
     }
-
+the_end:
     av_frame_free(&frame);
-    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: VideoThread exit"), this);
     return 0;
 }
+
+///**视频解码线程 */
+//int FFFmpegMediaTracks::video_thread()
+//{
+//    AVFrame* frame = av_frame_alloc();
+//    double pts;
+//    double duration;
+//    int ret;
+//    AVRational tb = this->video_st->time_base;
+//    AVRational frame_rate = av_guess_frame_rate(this->ic, this->video_st, NULL);
+//
+//    if (!frame) {
+//        UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because alloc frame fail"), this);
+//        return AVERROR(ENOMEM);
+//    }
+//
+//    for (;;) {
+//        ret = this->get_video_frame(frame);
+//        if (ret < 0) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because decode frame fail"), this);
+//            av_frame_free(&frame);
+//            return 0;
+//        }
+//        if (!ret)
+//            continue;
+//
+//        duration = (frame_rate.num && frame_rate.den ? av_q2d({ frame_rate.den, frame_rate.num }) : 0);
+//        pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+//
+//        //精准seek控制
+//        if (this->accurate_video_seek_flag) {
+//            if (pts < this->accurate_seek_time) {
+//                av_frame_unref(frame);
+//                continue;
+//            }
+//            else {
+//                this->accurate_video_seek_flag = 0;
+//            }
+//        }
+//
+//
+//        ret = queue_picture(frame, pts, duration, frame->pkt_pos, this->viddec->pkt_serial);
+//        av_frame_unref(frame);
+//        if (ret < 0) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: VideoThread exit because picture queue fail"), this);
+//            av_frame_free(&frame);
+//            return 0;
+//        }
+//    }
+//
+//    av_frame_free(&frame);
+//    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: VideoThread exit"), this);
+//    return 0;
+//}
 
 /**字幕解码线程 */
 int FFFmpegMediaTracks::subtitle_thread()
@@ -1956,15 +2196,13 @@ int FFFmpegMediaTracks::subtitle_thread()
     double pts;
 
     for (;;) {
-        sp = this->subpq.frame_queue_peek_writable();
-        if (!sp) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: SubtitleThread exit because peek a writable frame fail"), this);
+        sp = this->subpq.frame_queue_peek_writable()
+        if (!sp)
             return 0;
-        }
 
-        got_subtitle = this->subdec->decoder_decode_frame(NULL, &sp->sub);
-        if (got_subtitle < 0)
+        if ((got_subtitle = this->subdec->decoder_decode_frame(NULL, &sp->sub)) < 0)
             break;
+
         pts = 0;
 
         if (got_subtitle && sp->sub.format == 0) {
@@ -1975,25 +2213,63 @@ int FFFmpegMediaTracks::subtitle_thread()
             sp->width = this->subdec->avctx->width;
             sp->height = this->subdec->avctx->height;
             sp->uploaded = 0;
-            //精准seek控制
-            if (this->accurate_subtitle_seek_flag) {
-                if (sp->pts < this->accurate_seek_time) {
-                    continue;
-                }
-                else {
-                    this->accurate_subtitle_seek_flag = 0;
-                }
-            }
-            this->subpq.frame_queue_push();
+
+            /* now we can update the picture count */
+            this->subpq.frame_queue_push(); //将解码后的字幕帧放入队列
         }
         else if (got_subtitle) {
             avsubtitle_free(&sp->sub);
         }
     }
-
-    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: SubtitleThread exit"), this);
     return 0;
 }
+
+///**字幕解码线程 */
+//int FFFmpegMediaTracks::subtitle_thread()
+//{
+//    FFmpegFrame* sp;
+//    int got_subtitle;
+//    double pts;
+//
+//    for (;;) {
+//        sp = this->subpq.frame_queue_peek_writable();
+//        if (!sp) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks %p: SubtitleThread exit because peek a writable frame fail"), this);
+//            return 0;
+//        }
+//
+//        got_subtitle = this->subdec->decoder_decode_frame(NULL, &sp->sub);
+//        if (got_subtitle < 0)
+//            break;
+//        pts = 0;
+//
+//        if (got_subtitle && sp->sub.format == 0) {
+//            if (sp->sub.pts != AV_NOPTS_VALUE)
+//                pts = sp->sub.pts / (double)AV_TIME_BASE;
+//            sp->pts = pts;
+//            sp->serial = this->subdec->pkt_serial;
+//            sp->width = this->subdec->avctx->width;
+//            sp->height = this->subdec->avctx->height;
+//            sp->uploaded = 0;
+//            //精准seek控制
+//            if (this->accurate_subtitle_seek_flag) {
+//                if (sp->pts < this->accurate_seek_time) {
+//                    continue;
+//                }
+//                else {
+//                    this->accurate_subtitle_seek_flag = 0;
+//                }
+//            }
+//            this->subpq.frame_queue_push();
+//        }
+//        else if (got_subtitle) {
+//            avsubtitle_free(&sp->sub);
+//        }
+//    }
+//
+//    UE_LOG(LogFFmpegMedia, Log, TEXT("Tracks %p: SubtitleThread exit"), this);
+//    return 0;
+//}
 
 /** 判断是否为实时流 */
 int FFFmpegMediaTracks::is_realtime(AVFormatContext* s)
@@ -2077,85 +2353,93 @@ int FFFmpegMediaTracks::stream_has_enough_packets(AVStream* st, int stream_id, F
         (st->disposition & AV_DISPOSITION_ATTACHED_PIC) ||
         (queue->nb_packets > MIN_FRAMES && (!queue->duration || av_q2d(st->time_base) * queue->duration > 1.0));
 }
-
-/**音频解码*/
+/**
+ * @brief Decode one audio frame and return its uncompressed size.
+ * The processed audio frame is decoded, converted if required, and 
+ * stored in is->audio_buf, with size in bytes given by the return
+ * value.
+ * @param time 
+ * @param duration 
+ * @return 
+*/
 int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
 {
     int data_size, resampled_data_size;
     av_unused double audio_clock0;
     int wanted_nb_samples;
-    FFmpegFrame* af = NULL;
+    FFmpegFrame* af;
 
     if (this->paused)
         return -1;
-    if (CurrentState == EMediaState::Paused || CurrentState == EMediaState::Stopped)
-        return -1;
 
     do {
-        af = this->sampq.frame_queue_peek_readable();
+        af = this->sampq.frame_queue_peek_readable()
         if (!af)
             return -1;
         this->sampq.frame_queue_next();
     } while (af->serial != this->audioq.serial);
 
-    //计算音频样本数据大小
-    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels, af->frame->nb_samples, (AVSampleFormat)af->frame->format, 1);
-    wanted_nb_samples = synchronize_audio(af->frame->nb_samples);//重设目标样本数
+    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels,
+        af->frame->nb_samples,
+        AVSampleFormat(af->frame->format), 1); //获取音频样本数据缓冲区大小
 
-    if (af->frame->format != this->audio_src.Format ||
-        av_channel_layout_compare(&af->frame->ch_layout, &this->audio_src.ChannelLayout) ||
-        af->frame->sample_rate != this->audio_src.SampleRate ||
+    wanted_nb_samples = this->synchronize_audio(af->frame->nb_samples);
+
+    if (af->frame->format != this->audio_src.fmt ||
+        av_channel_layout_compare(&af->frame->ch_layout, &this->audio_src.ch_layout) ||
+        af->frame->sample_rate != this->audio_src.freq ||
         (wanted_nb_samples != af->frame->nb_samples && !this->swr_ctx)) {
         swr_free(&this->swr_ctx);
         swr_alloc_set_opts2(&this->swr_ctx,
-            &this->audio_tgt.ChannelLayout, this->audio_tgt.Format, this->audio_tgt.SampleRate,
-            &af->frame->ch_layout, (AVSampleFormat)af->frame->format, af->frame->sample_rate,
+            &this->audio_tgt.ch_layout, this->audio_tgt.fmt, this->audio_tgt.freq,
+            &af->frame->ch_layout, AVSampleFormat(af->frame->format), af->frame->sample_rate,
             0, NULL);
         if (!this->swr_ctx || swr_init(this->swr_ctx) < 0) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!"), this,
-                af->frame->sample_rate, av_get_sample_fmt_name((AVSampleFormat)af->frame->format), af->frame->ch_layout.nb_channels,
-                this->audio_tgt.SampleRate, av_get_sample_fmt_name(this->audio_tgt.Format), this->audio_tgt.ChannelLayout.nb_channels);
+            av_log(NULL, AV_LOG_ERROR,
+                "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
+                af->frame->sample_rate, av_get_sample_fmt_name(AVSampleFormat(af->frame->format)), af->frame->ch_layout.nb_channels,
+                this->audio_tgt.freq, av_get_sample_fmt_name(this->audio_tgt.fmt), this->audio_tgt.ch_layout.nb_channels);
             swr_free(&this->swr_ctx);
             return -1;
         }
-        if (av_channel_layout_copy(&this->audio_src.ChannelLayout, &af->frame->ch_layout) < 0)
+        if (av_channel_layout_copy(&this->audio_src.ch_layout, &af->frame->ch_layout) < 0)
             return -1;
-        this->audio_src.SampleRate = af->frame->sample_rate;
-        this->audio_src.Format = (AVSampleFormat)af->frame->format;
+        this->audio_src.freq = af->frame->sample_rate;
+        this->audio_src.fmt = AVSampleFormat(af->frame->format);
     }
 
     if (this->swr_ctx) {
         const uint8_t** in = (const uint8_t**)af->frame->extended_data;
         uint8_t** out = &this->audio_buf1;
-        int out_count = (int64_t)wanted_nb_samples * this->audio_tgt.SampleRate / af->frame->sample_rate + 256;
-        int out_size = av_samples_get_buffer_size(NULL, this->audio_tgt.ChannelLayout.nb_channels, out_count, this->audio_tgt.Format, 0);
+        int out_count = (int64_t)wanted_nb_samples * this->audio_tgt.freq / af->frame->sample_rate + 256;
+        int out_size = av_samples_get_buffer_size(NULL, this->audio_tgt.ch_layout.nb_channels, out_count, this->audio_tgt.fmt, 0);
         int len2;
         if (out_size < 0) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: av_samples_get_buffer_size() failed"), this);
+            av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size() failed\n");
             return -1;
         }
         if (wanted_nb_samples != af->frame->nb_samples) {
-            if (swr_set_compensation(this->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * this->audio_tgt.SampleRate / af->frame->sample_rate,
-                wanted_nb_samples * this->audio_tgt.SampleRate / af->frame->sample_rate) < 0) {
-                UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: swr_set_compensation() failed"), this);
+            if (swr_set_compensation(this->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * this->audio_tgt.freq / af->frame->sample_rate,
+                wanted_nb_samples * this->audio_tgt.freq / af->frame->sample_rate) < 0) {
+                av_log(NULL, AV_LOG_ERROR, "swr_set_compensation() failed\n");
                 return -1;
             }
         }
-        av_fast_malloc(&this->audio_buf1, &this->audio_buf1_size, out_size); //该方法如果值错误，将会导致程序直接崩溃
+        av_fast_malloc(&this->audio_buf1, &this->audio_buf1_size, out_size);
         if (!this->audio_buf1)
             return AVERROR(ENOMEM);
         len2 = swr_convert(this->swr_ctx, out, out_count, in, af->frame->nb_samples);
         if (len2 < 0) {
-            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: swr_convert() failed"), this);
+            av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
             return -1;
         }
         if (len2 == out_count) {
-            UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: audio buffer is probably too small"), this);
+            av_log(NULL, AV_LOG_WARNING, "audio buffer is probably too small\n");
             if (swr_init(this->swr_ctx) < 0)
                 swr_free(&this->swr_ctx);
         }
         this->audio_buf = this->audio_buf1;
-        resampled_data_size = len2 * this->audio_tgt.ChannelLayout.nb_channels * av_get_bytes_per_sample(this->audio_tgt.Format);
+        resampled_data_size = len2 * this->audio_tgt.ch_layout.nb_channels * av_get_bytes_per_sample(this->audio_tgt.fmt);
     }
     else {
         this->audio_buf = af->frame->data[0];
@@ -2169,13 +2453,122 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
     else
         this->audio_clock = NAN;
     this->audio_clock_serial = af->serial;
-
+//#ifdef DEBUG
+//    {
+//        static double last_clock;
+//        printf("audio: delay=%0.3f clock=%0.3f clock0=%0.3f\n",
+//            is->audio_clock - last_clock,
+//            is->audio_clock, audio_clock0);
+//        last_clock = is->audio_clock;
+//    }
+//#endif
     time = FTimespan::FromSeconds(this->audio_clock);
     duration = FTimespan::FromSeconds(af->duration);
     return resampled_data_size;
 }
+///**音频解码*/
+//int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
+//{
+//    int data_size, resampled_data_size;
+//    av_unused double audio_clock0;
+//    int wanted_nb_samples;
+//    FFmpegFrame* af = NULL;
+//
+//    if (this->paused)
+//        return -1;
+//    if (CurrentState == EMediaState::Paused || CurrentState == EMediaState::Stopped)
+//        return -1;
+//
+//    do {
+//        af = this->sampq.frame_queue_peek_readable();
+//        if (!af)
+//            return -1;
+//        this->sampq.frame_queue_next();
+//    } while (af->serial != this->audioq.serial);
+//
+//    //计算音频样本数据大小
+//    data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels, af->frame->nb_samples, (AVSampleFormat)af->frame->format, 1);
+//    wanted_nb_samples = synchronize_audio(af->frame->nb_samples);//重设目标样本数
+//
+//    if (af->frame->format != this->audio_src.Format ||
+//        av_channel_layout_compare(&af->frame->ch_layout, &this->audio_src.ChannelLayout) ||
+//        af->frame->sample_rate != this->audio_src.SampleRate ||
+//        (wanted_nb_samples != af->frame->nb_samples && !this->swr_ctx)) {
+//        swr_free(&this->swr_ctx);
+//        swr_alloc_set_opts2(&this->swr_ctx,
+//            &this->audio_tgt.ChannelLayout, this->audio_tgt.Format, this->audio_tgt.SampleRate,
+//            &af->frame->ch_layout, (AVSampleFormat)af->frame->format, af->frame->sample_rate,
+//            0, NULL);
+//        if (!this->swr_ctx || swr_init(this->swr_ctx) < 0) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!"), this,
+//                af->frame->sample_rate, av_get_sample_fmt_name((AVSampleFormat)af->frame->format), af->frame->ch_layout.nb_channels,
+//                this->audio_tgt.SampleRate, av_get_sample_fmt_name(this->audio_tgt.Format), this->audio_tgt.ChannelLayout.nb_channels);
+//            swr_free(&this->swr_ctx);
+//            return -1;
+//        }
+//        if (av_channel_layout_copy(&this->audio_src.ChannelLayout, &af->frame->ch_layout) < 0)
+//            return -1;
+//        this->audio_src.SampleRate = af->frame->sample_rate;
+//        this->audio_src.Format = (AVSampleFormat)af->frame->format;
+//    }
+//
+//    if (this->swr_ctx) {
+//        const uint8_t** in = (const uint8_t**)af->frame->extended_data;
+//        uint8_t** out = &this->audio_buf1;
+//        int out_count = (int64_t)wanted_nb_samples * this->audio_tgt.SampleRate / af->frame->sample_rate + 256;
+//        int out_size = av_samples_get_buffer_size(NULL, this->audio_tgt.ChannelLayout.nb_channels, out_count, this->audio_tgt.Format, 0);
+//        int len2;
+//        if (out_size < 0) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: av_samples_get_buffer_size() failed"), this);
+//            return -1;
+//        }
+//        if (wanted_nb_samples != af->frame->nb_samples) {
+//            if (swr_set_compensation(this->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * this->audio_tgt.SampleRate / af->frame->sample_rate,
+//                wanted_nb_samples * this->audio_tgt.SampleRate / af->frame->sample_rate) < 0) {
+//                UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: swr_set_compensation() failed"), this);
+//                return -1;
+//            }
+//        }
+//        av_fast_malloc(&this->audio_buf1, &this->audio_buf1_size, out_size); //该方法如果值错误，将会导致程序直接崩溃
+//        if (!this->audio_buf1)
+//            return AVERROR(ENOMEM);
+//        len2 = swr_convert(this->swr_ctx, out, out_count, in, af->frame->nb_samples);
+//        if (len2 < 0) {
+//            UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: swr_convert() failed"), this);
+//            return -1;
+//        }
+//        if (len2 == out_count) {
+//            UE_LOG(LogFFmpegMedia, Warning, TEXT("Tracks: %p: audio buffer is probably too small"), this);
+//            if (swr_init(this->swr_ctx) < 0)
+//                swr_free(&this->swr_ctx);
+//        }
+//        this->audio_buf = this->audio_buf1;
+//        resampled_data_size = len2 * this->audio_tgt.ChannelLayout.nb_channels * av_get_bytes_per_sample(this->audio_tgt.Format);
+//    }
+//    else {
+//        this->audio_buf = af->frame->data[0];
+//        resampled_data_size = data_size;
+//    }
+//
+//    audio_clock0 = this->audio_clock;
+//    /* update the audio clock with the pts */
+//    if (!isnan(af->pts))
+//        this->audio_clock = af->pts + (double)af->frame->nb_samples / af->frame->sample_rate;
+//    else
+//        this->audio_clock = NAN;
+//    this->audio_clock_serial = af->serial;
+//
+//    time = FTimespan::FromSeconds(this->audio_clock);
+//    duration = FTimespan::FromSeconds(af->duration);
+//    return resampled_data_size;
+//}
 
-/**音视频同步*/
+
+/**
+ * @brief return the wanted number of samples to get better sync if sync_type is videoor external master clock
+ * @param nb_samples 
+ * @return 
+*/
 int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
 {
     int wanted_nb_samples = nb_samples;
@@ -2185,7 +2578,7 @@ int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
         double diff, avg_diff;
         int min_nb_samples, max_nb_samples;
 
-        diff = this->audclk.get_clock() - this->get_master_clock();
+        diff = this->audclk.get_clock() - this->get_master_clock();//得到与主时钟之间的差
 
         if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD) {
             this->audio_diff_cum = diff + this->audio_diff_avg_coef * this->audio_diff_cum;
@@ -2198,7 +2591,7 @@ int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
                 avg_diff = this->audio_diff_cum * (1.0 - this->audio_diff_avg_coef);
 
                 if (fabs(avg_diff) >= this->audio_diff_threshold) {
-                    wanted_nb_samples = nb_samples + (int)(diff * this->audio_src.SampleRate);
+                    wanted_nb_samples = nb_samples + (int)(diff * this->audio_src.freq);
                     min_nb_samples = ((nb_samples * (100 - SAMPLE_CORRECTION_PERCENT_MAX) / 100));
                     max_nb_samples = ((nb_samples * (100 + SAMPLE_CORRECTION_PERCENT_MAX) / 100));
                     wanted_nb_samples = av_clip(wanted_nb_samples, min_nb_samples, max_nb_samples);
@@ -2218,6 +2611,51 @@ int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
 
     return wanted_nb_samples;
 }
+
+
+///**音视频同步*/
+//int FFFmpegMediaTracks::synchronize_audio(int nb_samples)
+//{
+//    int wanted_nb_samples = nb_samples;
+//
+//    /* if not master, then we try to remove or add samples to correct the clock */
+//    if (this->get_master_sync_type() != AV_SYNC_AUDIO_MASTER) {
+//        double diff, avg_diff;
+//        int min_nb_samples, max_nb_samples;
+//
+//        diff = this->audclk.get_clock() - this->get_master_clock();
+//
+//        if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD) {
+//            this->audio_diff_cum = diff + this->audio_diff_avg_coef * this->audio_diff_cum;
+//            if (this->audio_diff_avg_count < AUDIO_DIFF_AVG_NB) {
+//                /* not enough measures to have a correct estimate */
+//                this->audio_diff_avg_count++;
+//            }
+//            else {
+//                /* estimate the A-V difference */
+//                avg_diff = this->audio_diff_cum * (1.0 - this->audio_diff_avg_coef);
+//
+//                if (fabs(avg_diff) >= this->audio_diff_threshold) {
+//                    wanted_nb_samples = nb_samples + (int)(diff * this->audio_src.SampleRate);
+//                    min_nb_samples = ((nb_samples * (100 - SAMPLE_CORRECTION_PERCENT_MAX) / 100));
+//                    max_nb_samples = ((nb_samples * (100 + SAMPLE_CORRECTION_PERCENT_MAX) / 100));
+//                    wanted_nb_samples = av_clip(wanted_nb_samples, min_nb_samples, max_nb_samples);
+//                }
+//                av_log(NULL, AV_LOG_TRACE, "diff=%f adiff=%f sample_diff=%d apts=%0.3f %f\n",
+//                    diff, avg_diff, wanted_nb_samples - nb_samples,
+//                    this->audio_clock, this->audio_diff_threshold);
+//            }
+//        }
+//        else {
+//            /* too big difference : may be initial PTS errors, so
+//               reset A-V filter */
+//            this->audio_diff_avg_count = 0;
+//            this->audio_diff_cum = 0;
+//        }
+//    }
+//
+//    return wanted_nb_samples;
+//}
 
 /**视频刷新*/
 void FFFmpegMediaTracks::video_refresh(double* remaining_time)
@@ -2350,39 +2788,28 @@ void FFFmpegMediaTracks::video_refresh(double* remaining_time)
     this->force_refresh = 0; //重置强制刷新状态
 }
 
-/**获取视频帧*/
+/**
+ * @brief 获取视频帧
+ * @param frame 
+ * @return 
+*/
 int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
 {
-    int got_picture = this->viddec->decoder_decode_frame(frame, NULL);
+    int got_picture;
+    int framedrop = -1;//todo: 做成setting
 
-    if (got_picture < 0)
+    if ((got_picture = this->viddec->decoder_decode_frame(frame, NULL)) < 0) //获取一个解码后的视频帧
         return -1;
 
     if (got_picture) {
-
-        if (avCodecHWConfig != nullptr && frame->format == avCodecHWConfig->pix_fmt) { //判断帧的格式与硬件配置中的格式是否一致，如果一致表示是从GPU中获取的
-            AVFrame* sw_frame = av_frame_alloc();
-            /*sw_frame->format = AV_PIX_FMT_NV12;
-            sw_frame->format = AV_PIX_FMT_NONE;*/
-            int err = av_hwframe_transfer_data(sw_frame, frame, 0); //将数据从GPU读取到CPU中
-            if (err < 0) {
-                av_frame_free(&frame);
-                av_frame_free(&sw_frame);
-                return -1;
-            }
-            av_frame_copy_props(sw_frame, frame);//拷贝元数据字段
-            av_frame_unref(frame); //重置frame
-            av_frame_move_ref(frame, sw_frame); //将sw_frame字段全部拷贝到frame
-        }
-
         double dpts = NAN;
 
         if (frame->pts != AV_NOPTS_VALUE)
             dpts = av_q2d(this->video_st->time_base) * frame->pts;
 
         frame->sample_aspect_ratio = av_guess_sample_aspect_ratio(this->ic, this->video_st, frame);
-        int framedrop = -1; //todo: drop frames when cpu is too slow
-        if (framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) {
+
+        if (framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) { //视频跳帧处理
             if (frame->pts != AV_NOPTS_VALUE) {
                 double diff = dpts - this->get_master_clock();
                 if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD &&
@@ -2399,6 +2826,58 @@ int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
 
     return got_picture;
 }
+
+///**获取视频帧*/
+//int FFFmpegMediaTracks::get_video_frame(AVFrame* frame)
+//{
+//    int got_picture = this->viddec->decoder_decode_frame(frame, NULL);
+//
+//    if (got_picture < 0)
+//        return -1;
+//
+//    if (got_picture) {
+//
+//        if (avCodecHWConfig != nullptr && frame->format == avCodecHWConfig->pix_fmt) { //判断帧的格式与硬件配置中的格式是否一致，如果一致表示是从GPU中获取的
+//            AVFrame* sw_frame = av_frame_alloc();
+//            /*sw_frame->format = AV_PIX_FMT_NV12;
+//            sw_frame->format = AV_PIX_FMT_NONE;*/
+//            int err = av_hwframe_transfer_data(sw_frame, frame, 0); //将数据从GPU读取到CPU中
+//            if (err < 0) {
+//                av_frame_free(&frame);
+//                av_frame_free(&sw_frame);
+//                return -1;
+//            }
+//            av_frame_copy_props(sw_frame, frame);//拷贝元数据字段
+//            av_frame_unref(frame); //重置frame
+//            av_frame_move_ref(frame, sw_frame); //将sw_frame字段全部拷贝到frame
+//        }
+//
+//        double dpts = NAN;
+//
+//        if (frame->pts != AV_NOPTS_VALUE)
+//            dpts = av_q2d(this->video_st->time_base) * frame->pts;
+//
+//        frame->sample_aspect_ratio = av_guess_sample_aspect_ratio(this->ic, this->video_st, frame);
+//        int framedrop = -1; //todo: drop frames when cpu is too slow
+//        if (framedrop > 0 || (framedrop && this->get_master_sync_type() != AV_SYNC_VIDEO_MASTER)) {
+//            if (frame->pts != AV_NOPTS_VALUE) {
+//                double diff = dpts - this->get_master_clock();
+//                if (!isnan(diff) && fabs(diff) < AV_NOSYNC_THRESHOLD &&
+//                    diff - this->frame_last_filter_delay < 0 &&
+//                    this->viddec->pkt_serial == this->vidclk.serial &&
+//                    this->videoq.nb_packets) {
+//                    this->frame_drops_early++;
+//                    av_frame_unref(frame);
+//                    got_picture = 0;
+//                }
+//            }
+//        }
+//    }
+//
+//    return got_picture;
+//}
+
+
 
 /** 图片入列 */
 int FFFmpegMediaTracks::queue_picture(AVFrame* src_frame, double pts, double duration, int64_t pos, int serial)

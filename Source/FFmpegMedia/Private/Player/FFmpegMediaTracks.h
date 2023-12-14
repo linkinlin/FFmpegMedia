@@ -38,6 +38,7 @@ extern  "C" {
 }
 
 struct AVFormatContext;
+struct AVTXContext;
 class FMediaSamples;
 class FFFmpegMediaAudioSamplePool;
 class FFFmpegMediaTextureSamplePool;
@@ -174,6 +175,7 @@ public:
 	const AVCodecHWConfig* FindBestDeviceType(const AVCodec* decoder);
 	IMediaSamples& GetSamples();
 	bool IsOnlyHasVideo();
+	int create_hwaccel(AVBufferRef** device_ctx);
 public:
 	//~ IMediaTracks interface
 	/**
@@ -368,8 +370,8 @@ private:
 	/** Media events to be forwarded to main thread. */
 	TQueue<EMediaEvent> DeferredEvents;
 
-	FFormat::AudioFormat         audio_src; //源音频格式
-	FFormat::AudioFormat         audio_tgt; //目标音频格式（当前好像总是一致）
+	//FFormat::AudioFormat         audio_src; //源音频格式
+	//FFormat::AudioFormat         audio_tgt; //目标音频格式（当前好像总是一致）
 	int currentOpenStreamNumber; //当前打开视频流数目，很重要，因为与ffplay中不同，UE中open stream和read是在两个线程中，需要保证所有流都开启之后，再读取
 	int streamTotalNumber; //流总数 
 	double LastFetchVideoTime = 0; //最后视频包时间
@@ -442,6 +444,7 @@ private:
 	int64_t audio_callback_time; //音频回调时间，
 
 	int audio_hw_buf_size; //与SDL相关
+	int audio_write_buf_size; //与SDL相关
 	uint8_t* audio_buf; //音频缓存
 	unsigned int audio_buf_size; /* in bytes */ //音频缓存大小
 	uint8_t* audio_buf1;
@@ -455,7 +458,7 @@ private:
 	int	last_audio_stream;
 	int last_subtitle_stream;	
 
-	double frame_last_filter_delay;
+	//double frame_last_filter_delay;
 	int frame_drops_early;
 
 	int last_paused;
@@ -463,9 +466,18 @@ private:
 
 	struct SwsContext* img_convert_ctx;
 	struct SwrContext* swr_ctx;
-	RDFTContext* rdft;
+	AVTXContext* rdft;
 	int rdft_bits;
 	FFTSample* rdft_data;
 
 	const AVCodecHWConfig* avCodecHWConfig;
+
+	struct AudioParams audio_src;
+	struct AudioParams audio_filter_src;
+	struct AudioParams audio_tgt;
+	int audio_buf_index; /* in bytes */
+	float* real_data;
+
+	double frame_last_returned_time;
+	double frame_last_filter_delay;
 };
