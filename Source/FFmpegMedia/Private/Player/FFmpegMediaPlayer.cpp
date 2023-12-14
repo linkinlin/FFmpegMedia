@@ -297,7 +297,7 @@ void FFmpegMediaPlayer::TickInput(FTimespan DeltaTime, FTimespan Timecode)
 
     if (MediaSourceChanged)
     {
-        EventSink.ReceiveMediaEvent(EMediaEvent::TracksChanged); //发送轨道改变事件，注意如果不发送改事件，无法触发FMediaPlayerFacade::SelectDefaultTracks方法调用
+       // EventSink.ReceiveMediaEvent(EMediaEvent::TracksChanged); //发送轨道改变事件，注意如果不发送改事件，无法触发FMediaPlayerFacade::SelectDefaultTracks方法调用
     }
     else {
         if (TrackSelectionChanged)

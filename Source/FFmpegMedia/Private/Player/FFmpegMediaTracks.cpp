@@ -619,6 +619,7 @@ FTimespan FFFmpegMediaTracks::RenderAudio()
         this->audclk.set_clock_at(this->audio_clock - (double)(2 * this->audio_hw_buf_size + this->audio_write_buf_size) / this->audio_tgt.bytes_per_sec, this->audio_clock_serial, audio_callback_time / 1000000.0);
         this->extclk.sync_clock_to_slave(&this->audclk);
     }
+    return time;
 }
 
 ///** 音频渲染 */
@@ -1586,7 +1587,7 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
     if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) {
         goto fail;
     }
-    t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX)
+    t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX);
     if (t) {
         UE_LOG(LogFFmpegMedia, Error, TEXT("Tracks: %p: Option %s not found."), this, t->key);
         ret = AVERROR_OPTION_NOT_FOUND;
@@ -1989,7 +1990,7 @@ int FFFmpegMediaTracks::audio_thread() {
 
             while (true) { //todo: 注意处理
                 FFrameData* fd = frame->opaque_ref ? (FFrameData*)frame->opaque_ref->data : NULL;
-                af = this->sampq.frame_queue_peek_writable()
+                af = this->sampq.frame_queue_peek_writable();
                 if (!af)
                     goto the_end;
 
@@ -2196,7 +2197,7 @@ int FFFmpegMediaTracks::subtitle_thread()
     double pts;
 
     for (;;) {
-        sp = this->subpq.frame_queue_peek_writable()
+        sp = this->subpq.frame_queue_peek_writable();
         if (!sp)
             return 0;
 
@@ -2373,7 +2374,7 @@ int FFFmpegMediaTracks::audio_decode_frame(FTimespan& time, FTimespan& duration)
         return -1;
 
     do {
-        af = this->sampq.frame_queue_peek_readable()
+        af = this->sampq.frame_queue_peek_readable();
         if (!af)
             return -1;
         this->sampq.frame_queue_next();
