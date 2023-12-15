@@ -1602,6 +1602,16 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         ret = av_channel_layout_copy(&ch_layout, &avctx->ch_layout); //拷贝音频编码格式
         if (ret < 0)
             goto fail;
+        {
+            this->audio_tgt.fmt = AV_SAMPLE_FMT_S16;
+            this->audio_tgt.freq = sample_rate;
+            this->audio_tgt.frame_size = av_samples_get_buffer_size(NULL, this->audio_tgt.ch_layout.nb_channels, 1, this->audio_tgt.fmt, 1);
+            this->audio_tgt.bytes_per_sec = av_samples_get_buffer_size(NULL, this->audio_tgt.ch_layout.nb_channels, this->audio_tgt.freq, this->audio_tgt.fmt, 1);
+            if (this->audio_tgt.bytes_per_sec <= 0 || this->audio_tgt.frame_size <= 0) {
+                av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size failed\n");
+                return -1;
+            }
+        }
 
         this->audio_hw_buf_size = ret;
         this->audio_src = this->audio_tgt;
