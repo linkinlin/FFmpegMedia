@@ -96,12 +96,12 @@ public:
     int packet_queue_get(AVPacket* pkt_, int block_, int* serial_);
 
 public:
-    AVFifo* pkt_list;
-    int nb_packets; //当前队列中packet数量
-    int size; //队列中所有数据的总字节数
-    int64_t duration; //队列中所有数据的时长之和
-    int abort_request; //是否中止
-    int serial; //序列号
+    AVFifo* pkt_list; //一个FIFO队列
+    int nb_packets; //表示队列当前存储的数据包数量
+    int size; //表示队列当前存储的包的总大小(字节为单位)
+    int64_t duration; //表示队列当前存储的数据包的总时长(微秒为单位)
+    int abort_request; //表示是否中止请求
+    int serial; //表示队列序列号
     FCriticalSection* mutex;
     FFmpegCond* cond;
 };

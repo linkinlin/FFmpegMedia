@@ -191,7 +191,7 @@ int FFmpegDecoder::decoder_start(FString threadName, std::function<void()> f)
  //    };
  //    return 0;
 
-    this->queue->packet_queue_start();
+    this->queue->packet_queue_start(); //启动队列,此时包序号为1,解码器序号为-1
     this->decoder_tid = LambdaFunctionRunnable::RunThreaded(threadName, f);
     if (!this->decoder_tid) {
         //av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
@@ -202,6 +202,21 @@ int FFmpegDecoder::decoder_start(FString threadName, std::function<void()> f)
 
 int FFmpegDecoder::decoder_init(AVCodecContext* avctx_, FFmpegPacketQueue* queue_, FFmpegCond* empty_queue_cond_)
 {
+    //memset(d, 0, sizeof(Decoder));
+    this->pkt = nullptr;
+    this->queue = nullptr;
+    this->avctx = nullptr;
+    this->pkt_serial = 0;
+    this->finished = 0;
+    this->packet_pending = 0;
+    this->packet_pending = 0;
+    this->empty_queue_cond = nullptr;
+    this->start_pts = 0;
+    this->start_pts_tb = {};
+    this->next_pts = 0;
+    this->next_pts_tb = {};
+    this->decoder_tid = nullptr;
+  
     this->pkt = av_packet_alloc();
     if (!this->pkt)
         return AVERROR(ENOMEM);
@@ -259,24 +274,24 @@ int FFmpegDecoder::decoder_decode_frame(AVFrame* frame_, AVSubtitle* sub_)
             } while (ret != AVERROR(EAGAIN));
         }
 
+        //得到队列中最新的包
         do {
             if (this->queue->nb_packets == 0)
-                this->empty_queue_cond->Signal();
+                this->empty_queue_cond->Signal();  //通知
             if (this->packet_pending) {
-                this->packet_pending = 0;
-            }
-            else {
-                int old_serial = this->pkt_serial;
+                this->packet_pending = 0;          //如果pending了,则重置为0，表示恢复正常
+            } else {
+                int old_serial = this->pkt_serial; //记录旧的包序号
                 if (this->queue->packet_queue_get(this->pkt, 1, &this->pkt_serial) < 0)
-                    return -1;
-                if (old_serial != this->pkt_serial) {
+                    return -1; //如果从队列中获取解码包失败，直接返回-1
+                if (old_serial != this->pkt_serial) { //取到了一个包
                     avcodec_flush_buffers(this->avctx);
                     this->finished = 0;
                     this->next_pts = this->start_pts;
                     this->next_pts_tb = this->start_pts_tb;
                 }
             }
-            if (this->queue->serial == this->pkt_serial)
+            if (this->queue->serial == this->pkt_serial) //只有当前取得的包的序号与队列序号一致
                 break;
             av_packet_unref(this->pkt);
         } while (1);

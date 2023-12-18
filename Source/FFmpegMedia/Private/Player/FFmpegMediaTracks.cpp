@@ -1603,8 +1603,10 @@ int FFFmpegMediaTracks::stream_component_open(int stream_index)
         if (ret < 0)
             goto fail;
         {
-            this->audio_tgt.fmt = AV_SAMPLE_FMT_S16;
-            this->audio_tgt.freq = sample_rate;
+            this->audio_tgt.fmt = AV_SAMPLE_FMT_S16; //设置采样格式
+            this->audio_tgt.freq = sample_rate; //设置采样频率
+            if (av_channel_layout_copy(&this->audio_tgt.ch_layout, &avctx->ch_layout) < 0) //设置音频布局
+                return -1;
             this->audio_tgt.frame_size = av_samples_get_buffer_size(NULL, this->audio_tgt.ch_layout.nb_channels, 1, this->audio_tgt.fmt, 1);
             this->audio_tgt.bytes_per_sec = av_samples_get_buffer_size(NULL, this->audio_tgt.ch_layout.nb_channels, this->audio_tgt.freq, this->audio_tgt.fmt, 1);
             if (this->audio_tgt.bytes_per_sec <= 0 || this->audio_tgt.frame_size <= 0) {
@@ -1991,14 +1993,14 @@ int FFFmpegMediaTracks::audio_thread() {
 
         if (got_frame) {
             tb = { 1, frame->sample_rate };
-
+            //这里将ffplay中与过滤器相关的代码都删除了
             reconfigure = this->auddec->pkt_serial != last_serial;
 
             if (reconfigure) {
                 last_serial = this->auddec->pkt_serial;
             }
 
-            while (true) { //todo: 注意处理
+            { //ffplay此处是个while循环，删除与过滤器相关代码后不需要while了
                 FFrameData* fd = frame->opaque_ref ? (FFrameData*)frame->opaque_ref->data : NULL;
                 af = this->sampq.frame_queue_peek_writable();
                 if (!af)
@@ -2015,8 +2017,8 @@ int FFFmpegMediaTracks::audio_thread() {
                 if (this->audioq.serial != this->auddec->pkt_serial)
                     break;
             }
-            if (ret == AVERROR_EOF)
-                this->auddec->finished = this->auddec->pkt_serial;
+            //if (ret == AVERROR_EOF)
+            //    this->auddec->finished = this->auddec->pkt_serial;
         }
     } while (ret >= 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF);
 the_end:

@@ -79,18 +79,18 @@ public:
     void decoder_destroy();
 
 public:
-    AVPacket* pkt;
-    FFmpegPacketQueue* queue;
-    AVCodecContext* avctx;
-    int pkt_serial;
-    int finished;
-    int packet_pending;
-    FFmpegCond* empty_queue_cond;
-    int64_t start_pts;
-    AVRational start_pts_tb;
-    int64_t next_pts;
-    AVRational next_pts_tb;
-    FRunnableThread* decoder_tid;
+    AVPacket* pkt; //当前解码器正在处理的包
+    FFmpegPacketQueue* queue; //用于解码器解码的数据包存储队列
+    AVCodecContext* avctx; //编码器上下文
+    int pkt_serial; //表示解码器当前正在处理的数据包的序列号
+    int finished;   //
+    int packet_pending; //包解码是否存在异常状态
+    FFmpegCond* empty_queue_cond; //
+    int64_t start_pts; //解码器起始时间戳
+    AVRational start_pts_tb; //解码器起始时间戳的时间基
+    int64_t next_pts; //解码器下一时间戳
+    AVRational next_pts_tb;  //解码器下一时间戳的时间基
+    FRunnableThread* decoder_tid; //解码线程
 
     int decoder_reorder_pts = -1; //todo: 做成配置类
 };

@@ -174,6 +174,20 @@ FFmpegFrameQueue::~FFmpegFrameQueue()
 int FFmpegFrameQueue::frame_queue_init(FFmpegPacketQueue* pktq_, int max_size_, int keep_last_)
 {
     int i;
+    //memset(f, 0, sizeof(FrameQueue)); 置零操作
+    for (i = 0; i < FRAME_QUEUE_SIZE; i++) {
+        this->queue[i] = new FFmpegFrame();
+    }
+    this->rindex = 0;
+    this->windex = 0;
+    this->size = 0;
+    this->max_size = 0;
+    this->keep_last = 0;
+    this->rindex_shown = 0;
+    this->mutex = nullptr;
+    this->cond = nullptr;
+    this->pktq = nullptr;
+
     this->mutex = new FCriticalSection();
     if (!(this->mutex)) {
         av_log(NULL, AV_LOG_FATAL, "FFmpegFrameQueue CreateMutex Fail\n");

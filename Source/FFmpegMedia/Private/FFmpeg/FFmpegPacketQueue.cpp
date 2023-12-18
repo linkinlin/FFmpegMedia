@@ -247,6 +247,17 @@ int FFmpegPacketQueue::packet_queue_put_nullpacket(AVPacket* pkt_, int stream_in
 
 int FFmpegPacketQueue::packet_queue_init()
 {
+    //memset(q, 0, sizeof(PacketQueue)); 置0操作
+    this->pkt_list = nullptr;
+    this->nb_packets = 0;
+    this->size = 0;
+    this->duration = 0;
+    this->abort_request = 0;
+    this->serial = 0;
+    this->mutex = nullptr;
+    this->cond = nullptr;
+
+
     this->pkt_list = av_fifo_alloc2(1, sizeof(MyAVPacketList), AV_FIFO_FLAG_AUTO_GROW);
     if (!this->pkt_list)
         return AVERROR(ENOMEM);
