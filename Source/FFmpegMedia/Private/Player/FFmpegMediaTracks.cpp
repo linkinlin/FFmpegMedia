@@ -572,6 +572,7 @@ int FFFmpegMediaTracks::AudioRenderThread() {
         if (this->paused) { //添加是否停止判断
             continue;
         }
+        av_usleep((int64_t)(REFRESH_RATE * 100000.0)); //睡一会儿~~
         if (this->MediaSamples->CanReceiveAudioSamples(1)) { //限制样本队列中的样本数量，防止样本过多造成内存占用率飙升
             FTimespan duration = RenderAudio();
         }
